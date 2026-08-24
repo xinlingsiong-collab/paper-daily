@@ -13,6 +13,9 @@ from scripts.collect_papers import (
     arxiv_retry_wait_seconds,
     cached_conference_years,
     collect,
+    domain_validation,
+    keyword_score,
+    score_paper,
     collection_cutoff,
     conference_abstract_sources,
     default_conference_years,
@@ -60,6 +63,70 @@ def paper(paper_id: str, level: str, published: str) -> dict:
         "matches": [],
         "chinese_summary": {},
     }
+
+
+class DomainGateTest(unittest.TestCase):
+    def make_topic(self) -> Topic:
+        return Topic(
+            id="architecture_history",
+            name="East Asian Architectural History",
+            description="Historic architecture and architectural history.",
+            keywords=["historic architecture", "architectural history"],
+            arxiv_categories=[],
+            domain_terms=["historic building", "architectural history", "traditional architecture", "historic architecture"],
+            exclude_terms=[
+                "computer architecture",
+                "software architecture",
+                "neural architecture",
+                "neural network architecture",
+                "architecture search",
+                "microarchitecture",
+            ],
+        )
+
+    def test_domain_gate_rejects_computer_architecture(self) -> None:
+        topic = self.make_topic()
+        paper = {
+            "title": "A New Computer Architecture for Efficient Inference",
+            "summary": "We propose a computer architecture with a novel memory hierarchy.",
+        }
+        score, positive, negative = domain_validation(topic, paper)
+        self.assertEqual(score, 0.0)
+        self.assertTrue(any("computer architecture" == item for item in negative))
+        match = score_paper(topic, paper)
+        self.assertEqual(match["score"], 0.0)
+        self.assertFalse(is_relevant_enough(paper, match))
+
+    def test_domain_gate_accepts_historic_architecture(self) -> None:
+        topic = self.make_topic()
+        paper = {
+            "title": "Historic Architecture in East Asia",
+            "summary": "This study examines traditional architecture and historic buildings in Japan.",
+        }
+        match = score_paper(topic, paper)
+        self.assertGreater(match["domain_score"], 0.0)
+        self.assertTrue(match["domain_hits"])
+        self.assertTrue(is_relevant_enough(paper, match))
+
+    def test_architecture_alone_does_not_pass_domain_gate(self) -> None:
+        topic = self.make_topic()
+        paper = {
+            "title": "Architecture Search for Neural Networks",
+            "summary": "We study neural network architecture search.",
+        }
+        match = score_paper(topic, paper)
+        self.assertEqual(match["score"], 0.0)
+        self.assertFalse(is_relevant_enough(paper, match))
+
+    def test_specific_architectural_terms_are_matched_as_phrases(self) -> None:
+        topic = self.make_topic()
+        paper = {
+            "title": "Historic Architecture and Traditional Buildings",
+            "summary": "A study of traditional architecture.",
+        }
+        score, hits = keyword_score(topic, paper)
+        self.assertGreater(score, 0.0)
+        self.assertIn("historic architecture", hits)
 
 
 class RetentionTest(unittest.TestCase):
