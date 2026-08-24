@@ -73,6 +73,9 @@ class ConferenceSource:
     dblp_toc_patterns: list[str]
     years: list[int]
     enabled: bool = True
+    provider: str = "dblp"
+    search_query: str = ""
+    container_title: str = ""
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -250,6 +253,7 @@ def parse_conference_sources(config: dict[str, Any], now: dt.datetime) -> list[C
         patterns = item.get("dblp_toc_patterns") or item.get("dblp_toc_pattern") or []
         if isinstance(patterns, str):
             patterns = [patterns]
+        provider = str(item.get("provider") or ("dblp" if patterns else "openalex")).strip().lower()
         years = parse_years(item.get("years")) or default_years
         source = ConferenceSource(
             id=str(item.get("id") or slugify(str(item.get("name", "venue")))),
@@ -258,8 +262,16 @@ def parse_conference_sources(config: dict[str, Any], now: dt.datetime) -> list[C
             dblp_toc_patterns=[str(pattern) for pattern in patterns if str(pattern).strip()],
             years=years,
             enabled=bool(item.get("enabled", True)),
+            provider=provider,
+            search_query=str(item.get("search_query") or ""),
+            container_title=str(item.get("container_title") or ""),
         )
-        if source.enabled and source.dblp_toc_patterns:
+        has_provider_config = (
+            (source.provider == "dblp" and bool(source.dblp_toc_patterns))
+            or (source.provider == "openalex" and bool(source.search_query))
+            or (source.provider == "crossref" and bool(source.container_title or source.search_query))
+        )
+        if source.enabled and has_provider_config:
             sources.append(source)
     return sources
 
@@ -1025,6 +1037,169 @@ def fetch_dblp_html_toc(toc_key: str, source: ConferenceSource, year: int) -> li
             print(f"DBLP temporary HTML error for {source.name} {year}: {exc}; retrying in {wait_seconds:.0f}s", flush=True)
             time.sleep(wait_seconds)
     raise RuntimeError(f"DBLP HTML request failed: {last_error}")
+
+
+
+def conference_paper_from_openalex_work(
+    work: dict[str, Any],
+    source: ConferenceSource,
+    year: int,
+) -> dict[str, Any] | None:
+    title = normalize_space(str(work.get("title") or ""))
+    if not title:
+        return None
+    work_id = str(work.get("id") or work.get("doi") or title)
+    authors = [
+        str((authorship.get("author") or {}).get("display_name") or "")
+        for authorship in work.get("authorships", [])
+        if isinstance(authorship, dict)
+    ]
+    primary = work.get("primary_location") or {}
+    source_meta = primary.get("source") or {}
+    venue = str(source_meta.get("display_name") or source.name)
+    doi = str(work.get("doi") or "")
+    paper_url = doi or str(work.get("id") or "")
+    pdf_url = str(primary.get("pdf_url") or "")
+    abstract = normalize_space(openalex_abstract_text(work))
+    concepts = [
+        str(concept.get("display_name") or "")
+        for concept in work.get("concepts", [])[:10]
+        if isinstance(concept, dict) and concept.get("display_name")
+    ]
+    return {
+        "id": f"openalex-conference:{source.id}:{year}:{work_id.rsplit('/', 1)[-1]}",
+        "source": f"OpenAlex · {source.name}",
+        "source_type": "conference",
+        "title": title,
+        "authors": [a for a in authors if a],
+        "summary": abstract or f"OpenAlex 会议论文题录：{source.name} {year}。",
+        "published": date_to_iso(work.get("publication_date") or work.get("publication_year") or year),
+        "updated": "",
+        "paper_url": paper_url,
+        "pdf_url": pdf_url or paper_url,
+        "categories": [source.name, source.group, str(year), *concepts],
+        "venue": venue,
+        "conference": {
+            "id": source.id,
+            "name": source.name,
+            "group": source.group,
+            "year": year,
+            "provider": "openalex",
+            "openalex_id": work_id,
+            "doi": doi,
+            "container_title": venue,
+        },
+    }
+
+
+def fetch_openalex_conference(source: ConferenceSource, max_results: int) -> list[dict[str, Any]]:
+    papers = []
+    for year in source.years:
+        params = {
+            "search": source.search_query,
+            "filter": f"from_publication_date:{year}-01-01,to_publication_date:{year}-12-31",
+            "per-page": str(max_results),
+            "sort": "publication_date:desc",
+        }
+        mailto = os.getenv("CONTACT_EMAIL") or os.getenv("OPENALEX_EMAIL")
+        if mailto:
+            params["mailto"] = mailto
+        url = f"{OPENALEX_WORKS_URL}?{urllib.parse.urlencode(params)}"
+        data = request_json(url, timeout=float(os.getenv("OPENALEX_TIMEOUT_SECONDS", "60")))
+        for work in data.get("results", []):
+            paper = conference_paper_from_openalex_work(work, source, year)
+            if paper:
+                papers.append(paper)
+    return dedupe_papers(papers)
+
+
+def crossref_date_for_item(item: dict[str, Any], fallback_year: int) -> str:
+    for field in ("published-print", "published-online", "published", "created", "issued"):
+        date_parts = (item.get(field) or {}).get("date-parts") or []
+        if date_parts and date_parts[0]:
+            parts = date_parts[0]
+            year = int(parts[0])
+            month = int(parts[1]) if len(parts) > 1 else 1
+            day = int(parts[2]) if len(parts) > 2 else 1
+            return f"{year:04d}-{month:02d}-{day:02d}T00:00:00+00:00"
+    return f"{fallback_year:04d}-01-01T00:00:00+00:00"
+
+
+def conference_paper_from_crossref_item(
+    item: dict[str, Any],
+    source: ConferenceSource,
+    year: int,
+) -> dict[str, Any] | None:
+    title = normalize_space(str((item.get("title") or [""])[0]))
+    if not title:
+        return None
+    doi = str(item.get("DOI") or "")
+    url = str(item.get("URL") or (f"https://doi.org/{doi}" if doi else ""))
+    authors = [
+        normalize_space(f"{author.get('given', '')} {author.get('family', '')}")
+        for author in item.get("author", [])
+        if isinstance(author, dict) and (author.get("given") or author.get("family"))
+    ]
+    container = normalize_space(str((item.get("container-title") or [source.container_title or source.name])[0]))
+    abstract = html_to_text(str(item.get("abstract") or ""))
+    return {
+        "id": f"crossref-conference:{doi or source.id + ':' + str(year) + ':' + title}",
+        "source": f"Crossref · {source.name}",
+        "source_type": "conference",
+        "title": title,
+        "authors": authors,
+        "summary": abstract or f"Crossref 会议论文题录：{source.name} {year}。",
+        "published": crossref_date_for_item(item, year),
+        "updated": "",
+        "paper_url": url,
+        "pdf_url": url,
+        "categories": [source.name, source.group, str(year)],
+        "venue": container,
+        "conference": {
+            "id": source.id,
+            "name": source.name,
+            "group": source.group,
+            "year": year,
+            "provider": "crossref",
+            "doi": doi,
+            "container_title": container,
+            "pages": str(item.get("page") or ""),
+        },
+    }
+
+
+def fetch_crossref_conference(source: ConferenceSource, max_results: int) -> list[dict[str, Any]]:
+    papers = []
+    for year in source.years:
+        params = {
+            "query.container-title": source.container_title,
+            "query": source.search_query,
+            "filter": f"from-pub-date:{year}-01-01,until-pub-date:{year}-12-31",
+            "rows": str(max_results),
+            "select": "DOI,title,author,container-title,published,published-print,published-online,created,issued,URL,page,type,abstract",
+            "sort": "published",
+            "order": "desc",
+        }
+        mailto = os.getenv("CONTACT_EMAIL") or os.getenv("CROSSREF_EMAIL")
+        if mailto:
+            params["mailto"] = mailto
+        url = f"{CROSSREF_WORKS_URL}?{urllib.parse.urlencode({k:v for k,v in params.items() if v})}"
+        data = request_json(url, timeout=float(os.getenv("CROSSREF_TIMEOUT_SECONDS", "60")))
+        for item in (data.get("message") or {}).get("items", []):
+            paper = conference_paper_from_crossref_item(item, source, year)
+            if paper:
+                papers.append(paper)
+    return dedupe_papers(papers)
+
+
+def fetch_conference_source(source: ConferenceSource, max_results: int) -> list[dict[str, Any]]:
+    if source.provider == "dblp":
+        return fetch_dblp_conference(source, max_results)
+    if source.provider == "openalex":
+        return fetch_openalex_conference(source, max_results)
+    if source.provider == "crossref":
+        return fetch_crossref_conference(source, max_results)
+    raise ValueError(f"Unsupported conference provider: {source.provider}")
 
 
 def fetch_dblp_conference(source: ConferenceSource, max_results: int) -> list[dict[str, Any]]:
@@ -2015,7 +2190,7 @@ def collect(
             "skipped_cached_years": len(source.years) - len(years_to_fetch),
         }
         if not years_to_fetch:
-            print(f"Skipping DBLP conference source from cache: {source.name} {', '.join(str(year) for year in source.years)}", flush=True)
+            print(f"Skipping conference source from cache: {source.name} {', '.join(str(year) for year in source.years)}", flush=True)
             continue
         if index:
             time.sleep(conference_delay_seconds)
@@ -2026,10 +2201,13 @@ def collect(
             dblp_toc_patterns=source.dblp_toc_patterns,
             years=years_to_fetch,
             enabled=source.enabled,
+            provider=source.provider,
+            search_query=source.search_query,
+            container_title=source.container_title,
         )
-        print(f"Fetching DBLP conference papers for source: {source.name} {', '.join(str(year) for year in years_to_fetch)}", flush=True)
+        print(f"Fetching {source.provider} conference papers for source: {source.name} {', '.join(str(year) for year in years_to_fetch)}", flush=True)
         try:
-            source_papers = fetch_dblp_conference(source_to_fetch, max_per_conference)
+            source_papers = fetch_conference_source(source_to_fetch, max_per_conference)
             all_candidates.extend(source_papers)
             successful_fetches += 1
             successful_conference_fetches += 1
