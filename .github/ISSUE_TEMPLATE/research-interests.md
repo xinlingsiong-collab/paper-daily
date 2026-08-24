@@ -9,136 +9,288 @@ assignees: ''
 ```json
 {
   "sources": [
-    { "type": "arxiv", "name": "arXiv" }
+    {
+      "type": "arxiv",
+      "name": "arXiv"
+    },
+    {
+      "type": "openalex",
+      "name": "OpenAlex"
+    }
   ],
   "conference_sources": {
     "enabled": true,
-    "include_default_venues": false,
     "current_year": 2026,
-    "lookback_years": 2,
+    "lookback_years": 3,
+    "include_default_venues": false,
     "venues": [
       {
-        "id": "isca",
-        "name": "ISCA",
-        "enabled": true,
-        "group": "computer architecture",
-        "dblp_toc_patterns": ["db/conf/isca/isca{year}.bht"]
+        "id": "sah",
+        "name": "SAH Annual International Conference",
+        "group": "architectural history",
+        "provider": "openalex",
+        "search_query": "Society of Architectural Historians annual conference architectural history historic architecture"
       },
       {
-        "id": "micro",
-        "name": "MICRO",
-        "enabled": true,
-        "group": "computer architecture",
-        "dblp_toc_patterns": ["db/conf/micro/micro{year}.bht"]
+        "id": "icomos",
+        "name": "ICOMOS",
+        "group": "heritage conservation",
+        "provider": "openalex",
+        "search_query": "ICOMOS conference heritage conservation historic buildings historic towns cultural heritage"
       },
       {
-        "id": "hpca",
-        "name": "HPCA",
-        "enabled": true,
-        "group": "computer architecture",
-        "dblp_toc_patterns": ["db/conf/hpca/hpca{year}.bht"]
+        "id": "aas",
+        "name": "Association for Asian Studies Annual Conference",
+        "group": "East Asian studies",
+        "provider": "openalex",
+        "search_query": "Association for Asian Studies annual conference China Japan Korea architecture cultural exchange"
       },
       {
-        "id": "asplos",
-        "name": "ASPLOS",
-        "enabled": true,
-        "group": "computer architecture",
-        "dblp_toc_patterns": [
-          "db/conf/asplos/asplos{year}-1.bht",
-          "db/conf/asplos/asplos{year}-2.bht",
-          "db/conf/asplos/asplos{year}-3.bht",
-          "db/conf/asplos/asplos{year}-4.bht"
-        ]
+        "id": "cipa",
+        "name": "CIPA Heritage Documentation",
+        "group": "heritage documentation",
+        "provider": "openalex",
+        "search_query": "CIPA heritage documentation symposium historic buildings photogrammetry laser scanning cultural heritage"
       },
       {
-        "id": "mlsys",
-        "name": "MLSys",
-        "enabled": true,
-        "group": "systems for machine learning",
-        "dblp_toc_patterns": ["db/conf/mlsys/mlsys{year}.bht"]
-      },
-      {
-        "id": "eurosys",
-        "name": "EuroSys",
-        "enabled": true,
-        "group": "systems",
-        "dblp_toc_patterns": ["db/conf/eurosys/eurosys{year}.bht"]
+        "id": "caadria",
+        "name": "CAADRIA Proceedings",
+        "group": "digital architecture and heritage",
+        "provider": "crossref",
+        "container_title": "CAADRIA proceedings",
+        "search_query": "architecture digital heritage historic building BIM"
       }
     ]
   },
   "topics": [
     {
-      "id": "llm_low_precision_quantization",
-      "name": "大模型低精度量化",
-      "description": "关注大语言模型低比特量化、混合精度、量化感知训练、后训练量化、权重量化、激活量化、KV cache 量化以及量化对推理性能和精度的影响。",
+      "id": "east_asian_architectural_history",
+      "name": "东亚历史建筑与建筑史",
+      "description": "关注中国、日本、韩国历史建筑与传统建筑的历史发展、建筑形式、类型、地域特征及比较建筑史研究。",
       "keywords": [
-        "large language model quantization",
-        "LLM quantization",
-        "low-bit quantization",
-        "post-training quantization",
-        "weight-only quantization",
-        "activation quantization",
-        "mixed precision",
-        "FP8",
-        "INT4",
-        "INT8",
-        "KV cache quantization"
+        "East Asian architectural history",
+        "historic architecture",
+        "traditional architecture",
+        "Chinese architecture",
+        "Japanese architecture",
+        "Korean architecture",
+        "architectural history",
+        "comparative architectural history"
       ],
-      "arxiv_categories": ["cs.CL", "cs.LG", "cs.AI", "cs.DC"]
+      "arxiv_categories": [],
+      "domain_terms": [
+        "historic building",
+        "traditional building",
+        "architectural history",
+        "architectural heritage",
+        "vernacular architecture",
+        "historic architecture",
+        "building history",
+        "architectural conservation",
+        "historic settlement",
+        "architectural archaeology"
+      ],
+      "exclude_terms": [
+        "computer architecture",
+        "software architecture",
+        "system architecture",
+        "network architecture",
+        "neural architecture",
+        "model architecture",
+        "hardware architecture",
+        "processor architecture",
+        "microarchitecture",
+        "instruction set architecture",
+        "compiler architecture",
+        "data architecture",
+        "cloud architecture",
+        "neural network architecture",
+        "architecture search",
+        "computer system architecture"
+      ]
     },
     {
-      "id": "tensor_compute_unit_architecture",
-      "name": "张量计算单元结构",
-      "description": "关注 GPU/NPU/TPU 张量计算单元、矩阵乘加阵列、数据流架构、片上存储层次、低精度张量核、AI 加速器微架构和算子映射。",
+      "id": "sino_japanese_korean_architectural_exchange",
+      "name": "中日韩建筑文化交流",
+      "description": "关注中国、日本、韩国之间建筑形式、建造技术、城市规划、宗教建筑及建筑知识的传播、交流、适应与本土化。",
       "keywords": [
-        "tensor processing unit",
-        "tensor core",
-        "matrix multiply unit",
-        "systolic array",
-        "AI accelerator architecture",
-        "NPU architecture",
-        "GPU tensor core",
-        "low precision tensor compute",
-        "dataflow architecture",
-        "on-chip memory hierarchy"
+        "East Asian architectural exchange",
+        "Sino-Japanese architectural exchange",
+        "China-Korea architectural exchange",
+        "architectural transmission",
+        "architectural diffusion",
+        "cultural exchange",
+        "architectural adaptation",
+        "architectural influence"
       ],
-      "arxiv_categories": ["cs.AR", "cs.DC", "cs.LG", "cs.PF"]
+      "arxiv_categories": [],
+      "domain_terms": [
+        "East Asian architectural exchange",
+        "architectural transmission",
+        "architectural diffusion",
+        "cultural exchange",
+        "Chinese architecture",
+        "Japanese architecture",
+        "Korean architecture",
+        "historic architecture",
+        "traditional architecture",
+        "architectural history"
+      ],
+      "exclude_terms": [
+        "computer architecture",
+        "software architecture",
+        "system architecture",
+        "network architecture",
+        "neural architecture",
+        "model architecture",
+        "hardware architecture",
+        "processor architecture",
+        "microarchitecture",
+        "compiler",
+        "machine learning",
+        "deep learning",
+        "neural network architecture",
+        "architecture search",
+        "computer system architecture"
+      ]
     },
     {
-      "id": "llm_inference_cluster_communication",
-      "name": "大模型推理集群通信优化",
-      "description": "关注分布式大模型推理、prefill/decode 分离、张量并行、流水并行、专家并行、跨节点通信、调度、负载均衡和 serving 系统吞吐延迟优化。",
+      "id": "historical_architectural_evolution_typology",
+      "name": "历史建筑演变与类型学",
+      "description": "关注历史建筑和传统建筑形式的演变、转型、延续及类型学发展，包括建筑形态、空间组织、功能变化与建造体系的历史演化。",
       "keywords": [
-        "LLM inference serving",
-        "distributed inference",
-        "inference cluster",
-        "tensor parallelism",
-        "pipeline parallelism",
-        "expert parallelism",
-        "all-reduce",
-        "collective communication",
-        "prefill decode disaggregation",
-        "serving scheduler"
+        "architectural evolution",
+        "architectural transformation",
+        "architectural typology",
+        "historical building typology",
+        "architectural morphology",
+        "architectural continuity",
+        "traditional architectural forms",
+        "architectural development"
       ],
-      "arxiv_categories": ["cs.DC", "cs.PF", "cs.CL", "cs.LG"]
+      "arxiv_categories": [],
+      "domain_terms": [
+        "historic building",
+        "traditional building",
+        "architectural typology",
+        "historical building typology",
+        "architectural morphology",
+        "architectural evolution",
+        "architectural transformation",
+        "traditional architectural forms",
+        "building history",
+        "spatial form",
+        "historic architecture"
+      ],
+      "exclude_terms": [
+        "computer architecture",
+        "software architecture",
+        "system architecture",
+        "neural architecture",
+        "model architecture",
+        "hardware architecture",
+        "processor architecture",
+        "microarchitecture",
+        "network architecture",
+        "compiler",
+        "machine learning",
+        "deep learning",
+        "neural network architecture",
+        "architecture search",
+        "computer system architecture"
+      ]
     },
     {
-      "id": "kvcache_compression_storage_scheduling",
-      "name": "KV cache 压缩与存储调度",
-      "description": "关注大模型推理中的 KV cache 压缩、淘汰、分页、卸载、预取、层级存储、显存管理和长上下文推理效率优化。",
+      "id": "historic_building_conservation_settlements",
+      "name": "历史建筑与历史城镇保护",
+      "description": "关注历史建筑、历史城镇、历史街区、传统村落与传统聚落的保护、修复、再利用、遗产管理及历史城市景观。",
       "keywords": [
-        "KV cache compression",
-        "KV cache eviction",
-        "KV cache scheduling",
-        "paged attention",
-        "attention cache",
-        "long context inference",
-        "memory offloading",
-        "GPU memory management",
-        "cache prefetching",
-        "LLM serving memory"
+        "historic building conservation",
+        "architectural conservation",
+        "heritage conservation",
+        "historic building restoration",
+        "historic towns",
+        "historic settlements",
+        "historic districts",
+        "adaptive reuse"
       ],
-      "arxiv_categories": ["cs.CL", "cs.LG", "cs.DC", "cs.PF"]
+      "arxiv_categories": [],
+      "domain_terms": [
+        "historic building",
+        "architectural conservation",
+        "heritage conservation",
+        "historic building restoration",
+        "historic town",
+        "historic settlement",
+        "historic district",
+        "traditional settlement",
+        "vernacular architecture",
+        "adaptive reuse",
+        "historic architecture"
+      ],
+      "exclude_terms": [
+        "computer architecture",
+        "software architecture",
+        "system architecture",
+        "network architecture",
+        "neural architecture",
+        "model architecture",
+        "hardware architecture",
+        "processor architecture",
+        "microarchitecture",
+        "compiler",
+        "machine learning",
+        "deep learning",
+        "neural network architecture",
+        "architecture search",
+        "computer system architecture"
+      ]
+    },
+    {
+      "id": "architectural_archaeology_digital_heritage",
+      "name": "建筑考古与数字遗产",
+      "description": "关注建筑考古、建筑年代与建造史研究，以及3D扫描、摄影测量、HBIM、数字重建等数字技术在历史建筑与建筑遗产记录、分析和保护中的应用。",
+      "keywords": [
+        "architectural archaeology",
+        "building archaeology",
+        "building history",
+        "architectural chronology",
+        "historic building survey",
+        "digital heritage",
+        "HBIM",
+        "3D documentation"
+      ],
+      "arxiv_categories": [],
+      "domain_terms": [
+        "architectural archaeology",
+        "building archaeology",
+        "building history",
+        "architectural chronology",
+        "historic building survey",
+        "digital heritage",
+        "heritage documentation",
+        "HBIM",
+        "photogrammetry",
+        "3D documentation",
+        "historic architecture"
+      ],
+      "exclude_terms": [
+        "computer architecture",
+        "software architecture",
+        "system architecture",
+        "network architecture",
+        "neural architecture",
+        "model architecture",
+        "hardware architecture",
+        "processor architecture",
+        "microarchitecture",
+        "compiler",
+        "machine learning",
+        "deep learning",
+        "neural network architecture",
+        "architecture search",
+        "computer system architecture"
+      ]
     }
   ]
 }
