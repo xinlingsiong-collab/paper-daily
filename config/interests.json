@@ -68,10 +68,36 @@
         "architectural history",
         "comparative architectural history"
       ],
-      "arxiv_categories": [
-        "arch.HA",
-        "cs.CY",
-        "cs.HC"
+      "arxiv_categories": [],
+      "domain_terms": [
+        "historic building",
+        "traditional building",
+        "architectural history",
+        "architectural heritage",
+        "vernacular architecture",
+        "historic architecture",
+        "building history",
+        "architectural conservation",
+        "historic settlement",
+        "architectural archaeology"
+      ],
+      "exclude_terms": [
+        "computer architecture",
+        "software architecture",
+        "system architecture",
+        "network architecture",
+        "neural architecture",
+        "model architecture",
+        "hardware architecture",
+        "processor architecture",
+        "microarchitecture",
+        "instruction set architecture",
+        "compiler architecture",
+        "data architecture",
+        "cloud architecture",
+        "neural network architecture",
+        "architecture search",
+        "computer system architecture"
       ]
     },
     {
@@ -88,10 +114,35 @@
         "architectural adaptation",
         "architectural influence"
       ],
-      "arxiv_categories": [
-        "arch.HA",
-        "cs.CY",
-        "cs.HC"
+      "arxiv_categories": [],
+      "domain_terms": [
+        "East Asian architectural exchange",
+        "architectural transmission",
+        "architectural diffusion",
+        "cultural exchange",
+        "Chinese architecture",
+        "Japanese architecture",
+        "Korean architecture",
+        "historic architecture",
+        "traditional architecture",
+        "architectural history"
+      ],
+      "exclude_terms": [
+        "computer architecture",
+        "software architecture",
+        "system architecture",
+        "network architecture",
+        "neural architecture",
+        "model architecture",
+        "hardware architecture",
+        "processor architecture",
+        "microarchitecture",
+        "compiler",
+        "machine learning",
+        "deep learning",
+        "neural network architecture",
+        "architecture search",
+        "computer system architecture"
       ]
     },
     {
@@ -108,10 +159,36 @@
         "traditional architectural forms",
         "architectural development"
       ],
-      "arxiv_categories": [
-        "arch.HA",
-        "cs.CY",
-        "cs.HC"
+      "arxiv_categories": [],
+      "domain_terms": [
+        "historic building",
+        "traditional building",
+        "architectural typology",
+        "historical building typology",
+        "architectural morphology",
+        "architectural evolution",
+        "architectural transformation",
+        "traditional architectural forms",
+        "building history",
+        "spatial form",
+        "historic architecture"
+      ],
+      "exclude_terms": [
+        "computer architecture",
+        "software architecture",
+        "system architecture",
+        "neural architecture",
+        "model architecture",
+        "hardware architecture",
+        "processor architecture",
+        "microarchitecture",
+        "network architecture",
+        "compiler",
+        "machine learning",
+        "deep learning",
+        "neural network architecture",
+        "architecture search",
+        "computer system architecture"
       ]
     },
     {
@@ -128,10 +205,36 @@
         "historic districts",
         "adaptive reuse"
       ],
-      "arxiv_categories": [
-        "arch.HA",
-        "cs.CY",
-        "cs.HC"
+      "arxiv_categories": [],
+      "domain_terms": [
+        "historic building",
+        "architectural conservation",
+        "heritage conservation",
+        "historic building restoration",
+        "historic town",
+        "historic settlement",
+        "historic district",
+        "traditional settlement",
+        "vernacular architecture",
+        "adaptive reuse",
+        "historic architecture"
+      ],
+      "exclude_terms": [
+        "computer architecture",
+        "software architecture",
+        "system architecture",
+        "network architecture",
+        "neural architecture",
+        "model architecture",
+        "hardware architecture",
+        "processor architecture",
+        "microarchitecture",
+        "compiler",
+        "machine learning",
+        "deep learning",
+        "neural network architecture",
+        "architecture search",
+        "computer system architecture"
       ]
     },
     {
@@ -148,11 +251,36 @@
         "HBIM",
         "3D documentation"
       ],
-      "arxiv_categories": [
-        "arch.HA",
-        "cs.CV",
-        "cs.HC",
-        "cs.DL"
+      "arxiv_categories": [],
+      "domain_terms": [
+        "architectural archaeology",
+        "building archaeology",
+        "building history",
+        "architectural chronology",
+        "historic building survey",
+        "digital heritage",
+        "heritage documentation",
+        "HBIM",
+        "photogrammetry",
+        "3D documentation",
+        "historic architecture"
+      ],
+      "exclude_terms": [
+        "computer architecture",
+        "software architecture",
+        "system architecture",
+        "network architecture",
+        "neural architecture",
+        "model architecture",
+        "hardware architecture",
+        "processor architecture",
+        "microarchitecture",
+        "compiler",
+        "machine learning",
+        "deep learning",
+        "neural network architecture",
+        "architecture search",
+        "computer system architecture"
       ]
     }
   ]
