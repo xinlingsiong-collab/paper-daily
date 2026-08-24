@@ -53,6 +53,8 @@ class Topic:
     description: str
     keywords: list[str]
     arxiv_categories: list[str]
+    domain_terms: list[str] = None
+    exclude_terms: list[str] = None
 
 
 @dataclass(frozen=True)
@@ -130,6 +132,8 @@ def parse_topics(config: dict[str, Any]) -> list[Topic]:
                 description=item.get("description", ""),
                 keywords=[str(k) for k in item.get("keywords", [])],
                 arxiv_categories=[str(c) for c in item.get("arxiv_categories", [])],
+                domain_terms=[str(k) for k in item.get("domain_terms", [])],
+                exclude_terms=[str(k) for k in item.get("exclude_terms", [])],
             )
         )
     if not topics:
@@ -1565,17 +1569,58 @@ def collection_cutoff(
     return now - dt.timedelta(days=max(0, days)), "lookback"
 
 
+def _contains_term(text: str, term: str) -> bool:
+    """Match a configured phrase without substring false positives."""
+    normalized_text = normalize_space(text).lower()
+    normalized_term = normalize_space(term).lower()
+    if not normalized_term:
+        return False
+    # Word-boundary matching prevents e.g. 'arch' from matching unrelated strings.
+    pattern = r"(?<![a-z0-9])" + re.escape(normalized_term) + r"(?![a-z0-9])"
+    return re.search(pattern, normalized_text) is not None
+
+
 def keyword_score(topic: Topic, paper: dict[str, Any]) -> tuple[float, list[str]]:
     haystack = f"{paper.get('title', '')} {paper.get('summary', '')}".lower()
     hits = []
     weighted = 0.0
     for keyword in topic.keywords:
-        normalized = keyword.lower()
-        if normalized in haystack:
+        if _contains_term(haystack, keyword):
             hits.append(keyword)
-            weighted += min(1.0, max(0.35, len(normalized.split()) / 5))
+            # Longer, more specific phrases carry more weight than single words.
+            weighted += min(1.0, max(0.45, len(keyword.split()) / 4))
     score = min(1.0, weighted / max(2.0, min(5.0, len(topic.keywords) / 2)))
-    return score, hits[:6]
+    return score, hits[:8]
+
+
+def domain_validation(topic: Topic, paper: dict[str, Any]) -> tuple[float, list[str], list[str]]:
+    """
+    Domain gate for ambiguous terms such as architecture/architectural.
+
+    Positive domain terms establish that 'architecture' is being used in a
+    built-environment / architectural-history context. Negative terms are
+    hard exclusions for computer/software/network/neural architecture.
+    """
+    title = str(paper.get("title") or "")
+    summary = str(paper.get("summary") or "")
+    title_hits = [term for term in (topic.domain_terms or []) if _contains_term(title, term)]
+    body_hits = [term for term in (topic.domain_terms or []) if _contains_term(summary, term)]
+    positive_hits = list(dict.fromkeys(title_hits + body_hits))
+
+    negative_hits = [
+        term for term in (topic.exclude_terms or [])
+        if _contains_term(f"{title} {summary}", term)
+    ]
+
+    if negative_hits:
+        return 0.0, positive_hits[:10], negative_hits[:10]
+
+    if not positive_hits:
+        return 0.0, [], []
+
+    # Title evidence is more reliable than a single incidental abstract mention.
+    score = min(1.0, 0.55 * len(title_hits) + 0.25 * min(3, len(body_hits)))
+    return round(score, 3), positive_hits[:10], []
 
 
 def category_score(topic: Topic, paper: dict[str, Any]) -> float:
@@ -1587,7 +1632,12 @@ def category_score(topic: Topic, paper: dict[str, Any]) -> float:
 
 
 def lexical_overlap_score(topic: Topic, paper: dict[str, Any]) -> float:
-    topic_terms = set(re.findall(r"[a-zA-Z0-9]+", f"{topic.description} {' '.join(topic.keywords)}".lower()))
+    topic_terms = set(
+        re.findall(
+            r"[a-zA-Z0-9]+",
+            f"{topic.description} {' '.join(topic.keywords)} {' '.join(topic.domain_terms or [])}".lower(),
+        )
+    )
     paper_terms = set(re.findall(r"[a-zA-Z0-9]+", f"{paper.get('title', '')} {paper.get('summary', '')}".lower()))
     if not topic_terms or not paper_terms:
         return 0.0
@@ -1605,17 +1655,41 @@ def match_level(score: float) -> str:
 
 def score_paper(topic: Topic, paper: dict[str, Any]) -> dict[str, Any]:
     k_score, hits = keyword_score(topic, paper)
+    d_score, domain_hits, exclude_hits = domain_validation(topic, paper)
     c_score = category_score(topic, paper)
     l_score = lexical_overlap_score(topic, paper)
-    base_score = round(0.50 * k_score + 0.25 * c_score + 0.25 * l_score, 3)
+
+    if topic.domain_terms or topic.exclude_terms:
+        # Domain evidence is deliberately weighted most heavily. This prevents
+        # generic "architecture" hits from outranking architectural-history work.
+        base_score = round(
+            0.30 * k_score +
+            0.10 * c_score +
+            0.15 * l_score +
+            0.45 * d_score,
+            3,
+        )
+    else:
+        # Backward-compatible scoring for legacy/custom topics that have not
+        # yet defined a domain gate.
+        base_score = round(0.50 * k_score + 0.25 * c_score + 0.25 * l_score, 3)
+
+    if exclude_hits:
+        base_score = 0.0
+
     reason_parts = []
     if hits:
         reason_parts.append("关键词命中：" + "、".join(hits))
+    if domain_hits:
+        reason_parts.append("建筑领域语境：" + "、".join(domain_hits))
+    if exclude_hits:
+        reason_parts.append("排除语境：" + "、".join(exclude_hits))
     if c_score > 0:
         reason_parts.append("arXiv 分类重合：" + "、".join(sorted(set(topic.arxiv_categories) & set(paper.get("categories", [])))))
     if not reason_parts:
-        reason_parts.append("文本语义与方向描述存在弱相关，需要人工复核。")
-    return {
+        reason_parts.append("缺少明确的建筑学/建筑史语境，需要二次验证。")
+
+    result = {
         "topic_id": topic.id,
         "topic_name": topic.name,
         "score": base_score,
@@ -1623,6 +1697,13 @@ def score_paper(topic: Topic, paper: dict[str, Any]) -> dict[str, Any]:
         "reason": "；".join(reason_parts),
         "keyword_hits": hits,
     }
+    if topic.domain_terms or topic.exclude_terms:
+        result.update({
+            "domain_hits": domain_hits,
+            "exclude_hits": exclude_hits,
+            "domain_score": d_score,
+        })
+    return result
 
 
 def env_float(name: str, default: float) -> float:
@@ -1650,15 +1731,131 @@ def has_meaningful_summary(paper: dict[str, Any], min_chars: int = 80) -> bool:
 
 
 def is_relevant_enough(paper: dict[str, Any], best_match: dict[str, Any]) -> bool:
-    if best_match.get("keyword_hits"):
+    # Legacy/custom match objects without domain-gate metadata retain the old
+    # behavior. All configured architecture topics use the stricter branch.
+    if "domain_score" not in best_match and "exclude_hits" not in best_match:
+        if best_match.get("keyword_hits"):
+            return True
+        score = float(best_match.get("score") or 0.0)
+        if paper.get("source_type") == "conference":
+            return score >= env_float("MIN_CONFERENCE_SCORE", 0.18)
+        if not has_meaningful_summary(paper):
+            return score >= env_float("MIN_TITLE_ONLY_SCORE", 0.18)
+        return score >= env_float("MIN_PAPER_SCORE", 0.08)
+
+    # Hard reject: an explicit computer/software/system/neural architecture
+    # context must never pass merely because it contains "architecture".
+    if best_match.get("exclude_hits"):
+        return False
+
+    domain_score = float(best_match.get("domain_score") or 0.0)
+    min_domain_score = env_float("MIN_DOMAIN_SCORE", 0.15)
+
+    # Without domain evidence, low-information/title-only records are rejected.
+    if domain_score < min_domain_score:
+        return False
+
+    if best_match.get("domain_validation") == "irrelevant":
+        return False
+
+    if best_match.get("domain_validation") == "relevant":
         return True
 
     score = float(best_match.get("score") or 0.0)
     if paper.get("source_type") == "conference":
-        return score >= env_float("MIN_CONFERENCE_SCORE", 0.18)
+        return score >= env_float("MIN_CONFERENCE_SCORE", 0.30)
     if not has_meaningful_summary(paper):
-        return score >= env_float("MIN_TITLE_ONLY_SCORE", 0.18)
-    return score >= env_float("MIN_PAPER_SCORE", 0.08)
+        return score >= env_float("MIN_TITLE_ONLY_SCORE", 0.30)
+    return score >= env_float("MIN_PAPER_SCORE", 0.22)
+
+
+def build_domain_validation_prompt(topic: Topic, paper: dict[str, Any], base_match: dict[str, Any]) -> str:
+    return f"""
+你是“建筑史与建筑遗产”领域的严格论文筛选器。你的任务不是总结论文，而是判断它是否真正属于我的研究方向。
+
+【重要消歧规则】
+“architecture / architectural / architect”具有高度歧义。
+如果它指的是 computer architecture、software architecture、system architecture、
+network architecture、neural architecture、model architecture、hardware architecture、
+processor architecture、microarchitecture、instruction set architecture 等计算机/软件/硬件概念，
+必须判定为不相关。
+
+只有当论文明确讨论 buildings、historic buildings、traditional buildings、
+architectural history、architectural heritage、architectural conservation、
+vernacular architecture、historic towns、historic settlements、architectural archaeology
+或类似建筑学/建筑史/建筑遗产对象时，才可以判定为相关。
+
+我的研究方向：
+名称：{topic.name}
+描述：{topic.description}
+领域词：{", ".join(topic.domain_terms or [])}
+排除词：{", ".join(topic.exclude_terms or [])}
+
+论文：
+标题：{paper.get("title", "")}
+摘要：{paper.get("summary", "")}
+分类：{", ".join(paper.get("categories", []))}
+
+规则匹配结果：
+{base_match.get("reason", "")}
+
+请只输出 JSON：
+{{
+  "relevant": true,
+  "confidence": 0.0,
+  "reason": "用一句中文说明为什么属于或不属于建筑史/历史建筑/建筑遗产研究"
+}}
+""".strip()
+
+
+def validate_domain_with_llm(topic: Topic, paper: dict[str, Any], base_match: dict[str, Any]) -> dict[str, Any]:
+    if not llm_enabled() or not env_flag("LLM_DOMAIN_VALIDATION", True):
+        return {"status": "skipped", "confidence": 0.0, "reason": ""}
+
+    try:
+        data = call_openai_compatible(build_domain_validation_prompt(topic, paper, base_match))
+        relevant = bool(data.get("relevant", False))
+        confidence = max(0.0, min(1.0, float(data.get("confidence", 0.0) or 0.0)))
+        return {
+            "status": "relevant" if relevant else "irrelevant",
+            "confidence": confidence,
+            "reason": str(data.get("reason", "")),
+        }
+    except Exception as exc:
+        print(f"Warning: domain validation failed for {paper.get('id')}: {exc}", file=sys.stderr)
+        return {"status": "error", "confidence": 0.0, "reason": str(exc)}
+
+
+def apply_domain_validation(
+    topic: Topic,
+    paper: dict[str, Any],
+    best_match: dict[str, Any],
+    validations_used: int,
+) -> tuple[dict[str, Any], int]:
+    max_validations = max(0, env_int("MAX_DOMAIN_VALIDATIONS", 40))
+    if validations_used >= max_validations:
+        return best_match, validations_used
+
+    # Only spend LLM calls on candidates that have some domain evidence.
+    if float(best_match.get("domain_score") or 0.0) < env_float("LLM_MIN_DOMAIN_SCORE", 0.15):
+        return best_match, validations_used
+
+    if not llm_enabled() or not env_flag("LLM_DOMAIN_VALIDATION", True):
+        return best_match, validations_used
+
+    result = validate_domain_with_llm(topic, paper, best_match)
+    validations_used += 1
+    updated = dict(best_match)
+    updated["domain_validation"] = result["status"]
+    updated["domain_validation_confidence"] = result["confidence"]
+    if result["reason"]:
+        updated["domain_validation_reason"] = result["reason"]
+
+    # High-confidence rejection is an immediate hard gate.
+    if result["status"] == "irrelevant" and result["confidence"] >= env_float("MIN_DOMAIN_REJECTION_CONFIDENCE", 0.70):
+        updated["score"] = 0.0
+        updated["level"] = "low"
+    return updated, validations_used
 
 
 def enrich_conference_papers_from_arxiv(papers: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2235,6 +2432,8 @@ def collect(
     recent_papers = []
     daily_backfill_candidates = []
     filtered_low_relevance = 0
+    domain_validation_rejected = 0
+    domain_validation_used = 0
     raw_daily_candidate_count = 0
     daily_outside_cutoff_count = 0
     backfill_days = max(days, env_int("DAILY_BACKFILL_DAYS", 14))
@@ -2258,8 +2457,18 @@ def collect(
         matches = [score_paper(topic, paper) for topic in topics]
         matches.sort(key=lambda item: item["score"], reverse=True)
         best_match = matches[0]
+
+        # Second-pass domain validation. This is intentionally separate from
+        # keyword retrieval so ambiguous "architecture" hits do not pass.
+        best_topic = next((topic for topic in topics if topic.id == best_match.get("topic_id")), topics[0])
+        best_match, domain_validation_used = apply_domain_validation(
+            best_topic, paper, best_match, domain_validation_used
+        )
+
         if not is_relevant_enough(paper, best_match):
             filtered_low_relevance += 1
+            if best_match.get("domain_validation") == "irrelevant" or best_match.get("exclude_hits"):
+                domain_validation_rejected += 1
             continue
         paper["matches"] = matches
         paper["best_match"] = best_match
