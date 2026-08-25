@@ -1,12 +1,20 @@
 {
   "sources": [
     {
-      "type": "arxiv",
-      "name": "arXiv"
-    },
-    {
       "type": "openalex",
       "name": "OpenAlex"
+    },
+    {
+      "type": "crossref",
+      "name": "Crossref"
+    },
+    {
+      "type": "semantic_scholar",
+      "name": "Semantic Scholar"
+    },
+    {
+      "type": "arxiv",
+      "name": "arXiv"
     }
   ],
   "conference_sources": {
@@ -70,16 +78,18 @@
       ],
       "arxiv_categories": [],
       "domain_terms": [
+        "architectural history",
+        "historic architecture",
+        "traditional architecture",
         "historic building",
         "traditional building",
-        "architectural history",
         "architectural heritage",
         "vernacular architecture",
-        "historic architecture",
         "building history",
-        "architectural conservation",
-        "historic settlement",
-        "architectural archaeology"
+        "East Asian architecture",
+        "Chinese architecture",
+        "Japanese architecture",
+        "Korean architecture"
       ],
       "exclude_terms": [
         "computer architecture",
@@ -89,15 +99,21 @@
         "neural architecture",
         "model architecture",
         "hardware architecture",
-        "processor architecture",
         "microarchitecture",
+        "processor architecture",
         "instruction set architecture",
+        "computer system architecture",
         "compiler architecture",
-        "data architecture",
-        "cloud architecture",
-        "neural network architecture",
-        "architecture search",
-        "computer system architecture"
+        "distributed systems",
+        "machine learning",
+        "deep learning",
+        "neural network",
+        "computer vision",
+        "natural language processing",
+        "large language model",
+        "GPU",
+        "CPU",
+        "NPU"
       ]
     },
     {
@@ -117,15 +133,16 @@
       "arxiv_categories": [],
       "domain_terms": [
         "East Asian architectural exchange",
+        "architectural exchange",
         "architectural transmission",
         "architectural diffusion",
         "cultural exchange",
+        "architectural adaptation",
+        "architectural influence",
         "Chinese architecture",
         "Japanese architecture",
         "Korean architecture",
-        "historic architecture",
-        "traditional architecture",
-        "architectural history"
+        "East Asian architecture"
       ],
       "exclude_terms": [
         "computer architecture",
@@ -135,14 +152,21 @@
         "neural architecture",
         "model architecture",
         "hardware architecture",
-        "processor architecture",
         "microarchitecture",
-        "compiler",
+        "processor architecture",
+        "instruction set architecture",
+        "computer system architecture",
+        "compiler architecture",
+        "distributed systems",
         "machine learning",
         "deep learning",
-        "neural network architecture",
-        "architecture search",
-        "computer system architecture"
+        "neural network",
+        "computer vision",
+        "natural language processing",
+        "large language model",
+        "GPU",
+        "CPU",
+        "NPU"
       ]
     },
     {
@@ -161,34 +185,40 @@
       ],
       "arxiv_categories": [],
       "domain_terms": [
-        "historic building",
-        "traditional building",
-        "architectural typology",
-        "historical building typology",
-        "architectural morphology",
         "architectural evolution",
         "architectural transformation",
+        "architectural typology",
+        "building typology",
+        "architectural morphology",
+        "architectural continuity",
         "traditional architectural forms",
+        "historic building",
         "building history",
-        "spatial form",
-        "historic architecture"
+        "architectural development"
       ],
       "exclude_terms": [
         "computer architecture",
         "software architecture",
         "system architecture",
+        "network architecture",
         "neural architecture",
         "model architecture",
         "hardware architecture",
-        "processor architecture",
         "microarchitecture",
-        "network architecture",
-        "compiler",
+        "processor architecture",
+        "instruction set architecture",
+        "computer system architecture",
+        "compiler architecture",
+        "distributed systems",
         "machine learning",
         "deep learning",
-        "neural network architecture",
-        "architecture search",
-        "computer system architecture"
+        "neural network",
+        "computer vision",
+        "natural language processing",
+        "large language model",
+        "GPU",
+        "CPU",
+        "NPU"
       ]
     },
     {
@@ -207,17 +237,17 @@
       ],
       "arxiv_categories": [],
       "domain_terms": [
-        "historic building",
+        "historic building conservation",
         "architectural conservation",
         "heritage conservation",
         "historic building restoration",
-        "historic town",
-        "historic settlement",
-        "historic district",
-        "traditional settlement",
-        "vernacular architecture",
+        "historic buildings",
+        "historic towns",
+        "historic settlements",
+        "historic districts",
+        "traditional villages",
         "adaptive reuse",
-        "historic architecture"
+        "historic urban landscape"
       ],
       "exclude_terms": [
         "computer architecture",
@@ -227,14 +257,21 @@
         "neural architecture",
         "model architecture",
         "hardware architecture",
-        "processor architecture",
         "microarchitecture",
-        "compiler",
+        "processor architecture",
+        "instruction set architecture",
+        "computer system architecture",
+        "compiler architecture",
+        "distributed systems",
         "machine learning",
         "deep learning",
-        "neural network architecture",
-        "architecture search",
-        "computer system architecture"
+        "neural network",
+        "computer vision",
+        "natural language processing",
+        "large language model",
+        "GPU",
+        "CPU",
+        "NPU"
       ]
     },
     {
@@ -261,9 +298,10 @@
         "digital heritage",
         "heritage documentation",
         "HBIM",
-        "photogrammetry",
         "3D documentation",
-        "historic architecture"
+        "photogrammetry",
+        "laser scanning",
+        "digital reconstruction"
       ],
       "exclude_terms": [
         "computer architecture",
@@ -273,14 +311,21 @@
         "neural architecture",
         "model architecture",
         "hardware architecture",
-        "processor architecture",
         "microarchitecture",
-        "compiler",
+        "processor architecture",
+        "instruction set architecture",
+        "computer system architecture",
+        "compiler architecture",
+        "distributed systems",
         "machine learning",
         "deep learning",
-        "neural network architecture",
-        "architecture search",
-        "computer system architecture"
+        "neural network",
+        "computer vision",
+        "natural language processing",
+        "large language model",
+        "GPU",
+        "CPU",
+        "NPU"
       ]
     }
   ]
