@@ -145,6 +145,7 @@ function textIncludes(paper, query) {
     paper.chinese_summary?.evidence,
     paper.chinese_summary?.limitations,
     paper.chinese_summary?.why_relevant,
+    paper.chinese_summary?.translation,
   ]
     .join(" ")
     .toLowerCase();
@@ -210,6 +211,7 @@ function renderPaper(paper) {
   setText(node, ".summary-evidence", summary.evidence);
   setText(node, ".summary-limitations", summary.limitations);
   setText(node, ".summary-relevant", summary.why_relevant);
+  setText(node, ".summary-translation", summary.translation);
   setText(node, ".match-reason", `${best.topic_name || "未分类"}：${best.reason || ""}`);
 
   const tags = node.querySelector(".paper-tags");
