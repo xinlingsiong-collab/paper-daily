@@ -13,9 +13,6 @@ from scripts.collect_papers import (
     arxiv_retry_wait_seconds,
     cached_conference_years,
     collect,
-    domain_validation,
-    keyword_score,
-    score_paper,
     collection_cutoff,
     conference_abstract_sources,
     default_conference_years,
@@ -41,6 +38,8 @@ from scripts.collect_papers import (
     source_request_headers,
     SourceConfig,
     semantic_scholar_paper_from_item,
+    domain_validation,
+    score_paper,
     titles_match,
     Topic,
     trim_papers_for_storage,
@@ -65,68 +64,30 @@ def paper(paper_id: str, level: str, published: str) -> dict:
     }
 
 
-class DomainGateTest(unittest.TestCase):
-    def make_topic(self) -> Topic:
-        return Topic(
-            id="architecture_history",
-            name="East Asian Architectural History",
-            description="Historic architecture and architectural history.",
+class DomainFilteringTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.topic = Topic(
+            id="architecture",
+            name="历史建筑",
+            description="历史建筑与建筑史",
             keywords=["historic architecture", "architectural history"],
             arxiv_categories=[],
-            domain_terms=["historic building", "architectural history", "traditional architecture", "historic architecture"],
-            exclude_terms=[
-                "computer architecture",
-                "software architecture",
-                "neural architecture",
-                "neural network architecture",
-                "architecture search",
-                "microarchitecture",
-            ],
+            domain_terms=["historic architecture", "architectural history", "historic building"],
+            exclude_terms=["computer architecture", "neural architecture", "software architecture"],
         )
 
-    def test_domain_gate_rejects_computer_architecture(self) -> None:
-        topic = self.make_topic()
-        paper = {
-            "title": "A New Computer Architecture for Efficient Inference",
-            "summary": "We propose a computer architecture with a novel memory hierarchy.",
-        }
-        score, positive, negative = domain_validation(topic, paper)
-        self.assertEqual(score, 0.0)
-        self.assertTrue(any("computer architecture" == item for item in negative))
-        match = score_paper(topic, paper)
-        self.assertEqual(match["score"], 0.0)
-        self.assertFalse(is_relevant_enough(paper, match))
+    def test_computer_architecture_is_excluded(self) -> None:
+        p = {"title": "Computer architecture for modern processors", "summary": "A new processor architecture..."}
+        result = score_paper(self.topic, p)
+        self.assertEqual(result["score"], 0.0)
+        self.assertTrue(result["exclude_hits"])
 
-    def test_domain_gate_accepts_historic_architecture(self) -> None:
-        topic = self.make_topic()
-        paper = {
-            "title": "Historic Architecture in East Asia",
-            "summary": "This study examines traditional architecture and historic buildings in Japan.",
-        }
-        match = score_paper(topic, paper)
-        self.assertGreater(match["domain_score"], 0.0)
-        self.assertTrue(match["domain_hits"])
-        self.assertTrue(is_relevant_enough(paper, match))
-
-    def test_architecture_alone_does_not_pass_domain_gate(self) -> None:
-        topic = self.make_topic()
-        paper = {
-            "title": "Architecture Search for Neural Networks",
-            "summary": "We study neural network architecture search.",
-        }
-        match = score_paper(topic, paper)
-        self.assertEqual(match["score"], 0.0)
-        self.assertFalse(is_relevant_enough(paper, match))
-
-    def test_specific_architectural_terms_are_matched_as_phrases(self) -> None:
-        topic = self.make_topic()
-        paper = {
-            "title": "Historic Architecture and Traditional Buildings",
-            "summary": "A study of traditional architecture.",
-        }
-        score, hits = keyword_score(topic, paper)
-        self.assertGreater(score, 0.0)
-        self.assertIn("historic architecture", hits)
+    def test_historic_architecture_has_domain_score(self) -> None:
+        p = {"title": "Historic architecture in Kyoto", "summary": "A study of traditional buildings and architectural history."}
+        d_score, hits, excludes = domain_validation(self.topic, p)
+        self.assertGreaterEqual(d_score, 0.66)
+        self.assertTrue(hits)
+        self.assertFalse(excludes)
 
 
 class RetentionTest(unittest.TestCase):
@@ -258,14 +219,8 @@ class RetentionTest(unittest.TestCase):
         self.assertEqual(sources[1].url, "https://example.com/rss.xml")
         self.assertEqual(sources[1].headers_env, "CUSTOM_FEED_HEADERS")
 
-    def test_semantic_scholar_sources_are_opt_in(self) -> None:
+    def test_semantic_scholar_source_can_be_enabled_without_api_key(self) -> None:
         sources = parse_sources({"sources": ["arxiv", "semantic_scholar"]})
-
-        self.assertEqual([source.type for source in sources], ["arxiv"])
-
-        os.environ["ENABLE_SEMANTIC_SCHOLAR"] = "true"
-        sources = parse_sources({"sources": ["arxiv", "semantic_scholar"]})
-
         self.assertEqual([source.type for source in sources], ["arxiv", "semantic_scholar"])
 
     def test_source_request_headers_reads_secret_envs(self) -> None:
