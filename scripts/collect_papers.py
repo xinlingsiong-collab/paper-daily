@@ -42,7 +42,7 @@ DEFAULT_MAX_DATA_BYTES = 8 * 1024 * 1024
 DEFAULT_RECENT_HISTORY_DAYS = 45
 TRANSIENT_HTTP_CODES = {429, 500, 502, 503, 504}
 DBLP_TRANSIENT_HTTP_CODES = {429, 502, 503, 504}
-DEFAULT_SOURCE_TYPES = ["arxiv", "openalex", "crossref"]
+DEFAULT_SOURCE_TYPES = ["openalex", "crossref", "semantic_scholar", "arxiv"]
 FEED_NAMESPACES = {"atom": "http://www.w3.org/2005/Atom"}
 
 
@@ -380,6 +380,19 @@ def topic_plain_query(topic: Topic, limit: int = 6) -> str:
     return " ".join(topic.keywords[:limit]) or topic.name
 
 
+def topic_search_queries(topic: Topic, max_queries: int | None = None) -> list[str]:
+    """Use several short queries for high recall instead of one over-constrained query."""
+    configured = max_queries or max(1, env_int("SEARCH_QUERIES_PER_TOPIC", 4))
+    queries = []
+    for keyword in topic.keywords:
+        keyword = normalize_space(keyword)
+        if keyword and keyword not in queries:
+            queries.append(keyword)
+        if len(queries) >= configured:
+            break
+    return queries or [topic.name]
+
+
 def html_to_text(value: str) -> str:
     without_tags = re.sub(r"<[^>]+>", " ", value)
     return normalize_space(html.unescape(without_tags))
@@ -402,10 +415,27 @@ def date_to_iso(value: str | int | None) -> str:
 
 
 def request_json(url: str, headers: dict[str, str] | None = None, timeout: float = 60) -> Any:
-    req = urllib.request.Request(url, headers=headers or {"User-Agent": "paper-daily-collector/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
+    req_headers = headers or {"User-Agent": "paper-daily-collector/1.0"}
+    retries = max(1, int(os.getenv("HTTP_RETRIES", "3")))
+    for attempt in range(retries):
+        req = urllib.request.Request(url, headers=req_headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code not in TRANSIENT_HTTP_CODES or attempt == retries - 1:
+                raise
+            retry_after = exc.headers.get("Retry-After")
+            wait = max(3.0, float(retry_after)) if retry_after and retry_after.isdigit() else min(60.0, 5.0 * (2 ** attempt))
+            print(f"HTTP {exc.code}; retrying in {wait:.0f}s", flush=True)
+            time.sleep(wait)
+        except (TimeoutError, urllib.error.URLError, OSError) as exc:
+            if attempt == retries - 1:
+                raise
+            wait = min(30.0, 3.0 * (2 ** attempt))
+            print(f"HTTP temporary error: {exc}; retrying in {wait:.0f}s", flush=True)
+            time.sleep(wait)
+    raise RuntimeError("HTTP request failed after retries")
 
 def request_bytes(url: str, headers: dict[str, str] | None = None, timeout: float = 60) -> bytes:
     req = urllib.request.Request(url, headers=headers or {"User-Agent": "paper-daily-collector/1.0"})
@@ -1123,24 +1153,31 @@ def conference_paper_from_openalex_work(
 
 def fetch_openalex_conference(source: ConferenceSource, max_results: int) -> list[dict[str, Any]]:
     papers = []
-    for year in source.years:
-        params = {
-            "search": source.search_query,
-            "filter": f"from_publication_date:{year}-01-01,to_publication_date:{year}-12-31",
-            "per-page": str(max_results),
-            "sort": "publication_date:desc",
-        }
-        mailto = os.getenv("CONTACT_EMAIL") or os.getenv("OPENALEX_EMAIL")
-        if mailto:
-            params["mailto"] = mailto
-        url = f"{OPENALEX_WORKS_URL}?{urllib.parse.urlencode(params)}"
-        data = request_json(url, timeout=float(os.getenv("OPENALEX_TIMEOUT_SECONDS", "60")))
-        for work in data.get("results", []):
-            paper = conference_paper_from_openalex_work(work, source, year)
-            if paper:
-                papers.append(paper)
-    return dedupe_papers(papers)
+    queries = [q.strip() for q in source.search_query.split("|") if q.strip()] or [source.name]
+    query_limit = max(1, env_int("CONFERENCE_QUERY_VARIANTS", 2))
+    per_query = max(10, min(50, max_results))
 
+    for year in source.years:
+        for query in queries[:query_limit]:
+            params = {
+                "search": query,
+                "filter": f"from_publication_date:{year}-01-01,to_publication_date:{year}-12-31",
+                "per-page": str(per_query),
+                "sort": "publication_date:desc",
+            }
+            mailto = os.getenv("CONTACT_EMAIL") or os.getenv("OPENALEX_EMAIL")
+            if mailto:
+                params["mailto"] = mailto
+            url = f"{OPENALEX_WORKS_URL}?{urllib.parse.urlencode(params)}"
+            data = request_json(url, timeout=float(os.getenv("OPENALEX_TIMEOUT_SECONDS", "60")))
+            for work in data.get("results", []):
+                paper = conference_paper_from_openalex_work(work, source, year)
+                if paper:
+                    paper["search_query"] = query
+                    papers.append(paper)
+            if len(papers) >= max_results * 2:
+                break
+    return dedupe_papers(papers)
 
 def crossref_date_for_item(item: dict[str, Any], fallback_year: int) -> str:
     for field in ("published-print", "published-online", "published", "created", "issued"):
@@ -1210,25 +1247,28 @@ def fetch_crossref_conference(source: ConferenceSource, max_results: int) -> lis
     papers = []
     for year in source.years:
         params = {
-            "query.container-title": source.container_title,
-            "query": source.search_query,
+            "rows": str(min(max_results, 100)),
             "filter": f"from-pub-date:{year}-01-01,until-pub-date:{year}-12-31",
-            "rows": str(max_results),
-            "select": "DOI,title,author,container-title,published,published-print,published-online,created,issued,URL,page,type,abstract",
+            "select": "DOI,title,author,container-title,published,published-print,published-online,created,issued,URL,page,type,abstract,link,subject",
             "sort": "published",
             "order": "desc",
         }
+        if source.container_title:
+            params["query.container-title"] = source.container_title
+        elif source.search_query:
+            params["query.bibliographic"] = source.search_query
         mailto = os.getenv("CONTACT_EMAIL") or os.getenv("CROSSREF_EMAIL")
         if mailto:
             params["mailto"] = mailto
-        url = f"{CROSSREF_WORKS_URL}?{urllib.parse.urlencode({k:v for k,v in params.items() if v})}"
-        data = request_json(url, timeout=float(os.getenv("CROSSREF_TIMEOUT_SECONDS", "60")))
+        headers = {"User-Agent": f"paper-daily-collector/1.0 (mailto:{mailto or 'unknown@example.com'})"}
+        url = f"{CROSSREF_WORKS_URL}?{urllib.parse.urlencode({k: v for k, v in params.items() if v})}"
+        data = request_json(url, headers=headers, timeout=float(os.getenv("CROSSREF_TIMEOUT_SECONDS", "60")))
         for item in (data.get("message") or {}).get("items", []):
             paper = conference_paper_from_crossref_item(item, source, year)
             if paper:
                 papers.append(paper)
+        time.sleep(float(os.getenv("CROSSREF_CONFERENCE_DELAY_SECONDS", "2")))
     return dedupe_papers(papers)
-
 
 def fetch_conference_source(source: ConferenceSource, max_results: int) -> list[dict[str, Any]]:
     if source.provider == "dblp":
@@ -1287,23 +1327,30 @@ def openalex_abstract_text(work: dict[str, Any]) -> str:
 
 
 def fetch_openalex(topic: Topic, max_results: int, source: SourceConfig) -> list[dict[str, Any]]:
-    params = {
-        "search": topic_plain_query(topic),
-        "per-page": str(max_results),
-        "sort": "publication_date:desc",
-    }
-    mailto = os.getenv("CONTACT_EMAIL") or os.getenv("OPENALEX_EMAIL")
-    if mailto:
-        params["mailto"] = mailto
-    url = f"{OPENALEX_WORKS_URL}?{urllib.parse.urlencode(params)}"
-    data = request_json(url, timeout=float(os.getenv("OPENALEX_TIMEOUT_SECONDS", "60")))
     papers = []
-    for work in data.get("results", []):
-        paper = openalex_paper_from_work(work, source.name)
-        if paper:
-            paper["seed_topic"] = topic.id
-            papers.append(paper)
-    return papers
+    queries = topic_search_queries(topic)
+    per_query = max(5, min(25, max_results))
+    mailto = os.getenv("CONTACT_EMAIL") or os.getenv("OPENALEX_EMAIL")
+
+    for query in queries:
+        params = {
+            "search": query,
+            "per-page": str(per_query),
+            "sort": "publication_date:desc",
+        }
+        if mailto:
+            params["mailto"] = mailto
+        url = f"{OPENALEX_WORKS_URL}?{urllib.parse.urlencode(params)}"
+        data = request_json(url, timeout=float(os.getenv("OPENALEX_TIMEOUT_SECONDS", "60")))
+        for work in data.get("results", []):
+            paper = openalex_paper_from_work(work, source.name)
+            if paper:
+                paper["seed_topic"] = topic.id
+                paper["search_query"] = query
+                papers.append(paper)
+        if len(papers) >= max_results * 2:
+            break
+    return dedupe_papers(papers)
 
 def crossref_date(item: dict[str, Any]) -> str:
     for field in ("published-print", "published-online", "published", "created", "issued"):
@@ -1318,35 +1365,42 @@ def crossref_date(item: dict[str, Any]) -> str:
 
 
 def fetch_crossref(topic: Topic, max_results: int, source: SourceConfig) -> list[dict[str, Any]]:
-    params = {
-        "query.bibliographic": topic_plain_query(topic),
-        "rows": str(max_results),
-        "sort": "published",
-        "order": "desc",
-    }
-    mailto = os.getenv("CONTACT_EMAIL") or os.getenv("CROSSREF_EMAIL")
-    if mailto:
-        params["mailto"] = mailto
-    headers = {"User-Agent": f"paper-daily-collector/1.0 (mailto:{mailto or 'unknown@example.com'})"}
-    url = f"{CROSSREF_WORKS_URL}?{urllib.parse.urlencode(params)}"
-    data = request_json(url, headers=headers, timeout=float(os.getenv("CROSSREF_TIMEOUT_SECONDS", "60")))
     papers = []
-    for item in (data.get("message") or {}).get("items", []):
-        title = normalize_space(" ".join(str(part) for part in item.get("title", []) if part))
-        doi = str(item.get("DOI") or "")
-        paper_url = str(item.get("URL") or (f"https://doi.org/{doi}" if doi else ""))
-        if not title or not (doi or paper_url):
-            continue
-        authors = []
-        for author in item.get("author", [])[:12]:
-            name = normalize_space(f"{author.get('given', '')} {author.get('family', '')}")
-            if name:
-                authors.append(name)
-        subjects = [str(subject) for subject in item.get("subject", [])[:8]]
-        links = item.get("link") or []
-        pdf_url = next((str(link.get("URL") or "") for link in links if isinstance(link, dict) and "pdf" in str(link.get("content-type") or "").lower()), "")
-        papers.append(
-            {
+    queries = topic_search_queries(topic, max_queries=max(1, env_int("CROSSREF_QUERY_VARIANTS", 3)))
+    per_query = max(5, min(15, max_results))
+    mailto = os.getenv("CONTACT_EMAIL") or os.getenv("CROSSREF_EMAIL")
+    headers = {"User-Agent": f"paper-daily-collector/1.0 (mailto:{mailto or 'unknown@example.com'})"}
+
+    for query in queries:
+        params = {
+            "query.bibliographic": query,
+            "rows": str(per_query),
+            "sort": "published",
+            "order": "desc",
+        }
+        if mailto:
+            params["mailto"] = mailto
+        url = f"{CROSSREF_WORKS_URL}?{urllib.parse.urlencode(params)}"
+        data = request_json(url, headers=headers, timeout=float(os.getenv("CROSSREF_TIMEOUT_SECONDS", "60")))
+        for item in (data.get("message") or {}).get("items", []):
+            title = normalize_space(" ".join(str(part) for part in item.get("title", []) if part))
+            doi = str(item.get("DOI") or "")
+            paper_url = str(item.get("URL") or (f"https://doi.org/{doi}" if doi else ""))
+            if not title or not (doi or paper_url):
+                continue
+            authors = []
+            for author in item.get("author", [])[:12]:
+                name = normalize_space(f"{author.get('given', '')} {author.get('family', '')}")
+                if name:
+                    authors.append(name)
+            subjects = [str(subject) for subject in item.get("subject", [])[:8]]
+            links = item.get("link") or []
+            pdf_url = next(
+                (str(link.get("URL") or "") for link in links
+                 if isinstance(link, dict) and "pdf" in str(link.get("content-type") or "").lower()),
+                "",
+            )
+            papers.append({
                 "id": f"crossref:{doi or slugify(title)}",
                 "source": source.name,
                 "title": title,
@@ -1365,33 +1419,39 @@ def fetch_crossref(topic: Topic, max_results: int, source: SourceConfig) -> list
                 "license": "",
                 "categories": subjects,
                 "seed_topic": topic.id,
-            }
-        )
-    return papers
-
+                "search_query": query,
+            })
+        if len(papers) >= max_results * 2:
+            break
+    return dedupe_papers(papers)
 
 def fetch_semantic_scholar(topic: Topic, max_results: int, source: SourceConfig) -> list[dict[str, Any]]:
-    params = {
-        "query": topic_plain_query(topic),
-        "limit": str(min(max_results, 100)),
-        "fields": "paperId,title,abstract,authors,year,publicationDate,url,openAccessPdf,venue,externalIds,fieldsOfStudy",
-    }
+    papers = []
+    queries = topic_search_queries(topic, max_queries=max(1, env_int("SEMANTIC_QUERY_VARIANTS", 3)))
+    per_query = max(5, min(25, max_results))
     headers = {"User-Agent": "paper-daily-collector/1.0"}
     api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
     if api_key:
         headers["x-api-key"] = api_key
-    url = f"{SEMANTIC_SCHOLAR_SEARCH_URL}?{urllib.parse.urlencode(params)}"
-    data = request_json(url, headers=headers, timeout=float(os.getenv("SEMANTIC_SCHOLAR_TIMEOUT_SECONDS", "60")))
-    papers = []
-    for item in data.get("data") or []:
-        candidate = semantic_scholar_paper_from_item(item)
-        if not candidate:
-            continue
-        candidate["source"] = source.name
-        candidate["seed_topic"] = topic.id
-        papers.append(candidate)
-    return papers
 
+    for query in queries:
+        params = {
+            "query": query,
+            "limit": str(per_query),
+            "fields": "paperId,title,abstract,authors,year,publicationDate,url,openAccessPdf,venue,externalIds,fieldsOfStudy",
+        }
+        url = f"{SEMANTIC_SCHOLAR_SEARCH_URL}?{urllib.parse.urlencode(params)}"
+        data = request_json(url, headers=headers, timeout=float(os.getenv("SEMANTIC_SCHOLAR_TIMEOUT_SECONDS", "60")))
+        for item in data.get("data") or []:
+            candidate = semantic_scholar_paper_from_item(item)
+            if candidate:
+                candidate["source"] = source.name
+                candidate["seed_topic"] = topic.id
+                candidate["search_query"] = query
+                papers.append(candidate)
+        if len(papers) >= max_results * 2:
+            break
+    return dedupe_papers(papers)
 
 def fetch_google_scholar_serpapi(topic: Topic, max_results: int, source: SourceConfig) -> list[dict[str, Any]]:
     api_key = os.getenv("SERPAPI_API_KEY") or os.getenv("SERPAPI_KEY")
@@ -1605,9 +1665,13 @@ def domain_validation(topic: Topic, paper: dict[str, Any]) -> tuple[float, list[
         normalized = normalize_space(term).lower()
         if normalized and re.search(r"(?<![a-z])" + re.escape(normalized) + r"(?![a-z])", haystack):
             negative_hits.append(term)
-    if negative_hits:
-        return 0.0, positive_hits[:8], negative_hits[:8]
-    return min(1.0, len(positive_hits) / 3.0), positive_hits[:8], []
+    # Reject computer/software architecture only when no genuine architectural
+    # or heritage context is present. Digital-heritage papers may legitimately
+    # mention "system architecture" or computer vision as a tool.
+    score = min(1.0, len(positive_hits) / 2.0)
+    if negative_hits and not positive_hits:
+        return 0.0, [], negative_hits[:10]
+    return score, positive_hits[:10], negative_hits[:10]
 
 
 def category_score(topic: Topic, paper: dict[str, Any]) -> float:
@@ -1642,7 +1706,7 @@ def score_paper(topic: Topic, paper: dict[str, Any]) -> dict[str, Any]:
     c_score = category_score(topic, paper)
     l_score = lexical_overlap_score(topic, paper)
     score = round(0.30 * k_score + 0.45 * d_score + 0.10 * c_score + 0.15 * l_score, 3)
-    if exclude_hits:
+    if exclude_hits and not domain_hits:
         score = 0.0
     reason_parts = []
     if hits:
@@ -1692,10 +1756,10 @@ def has_meaningful_summary(paper: dict[str, Any], min_chars: int = 80) -> bool:
 
 
 def is_relevant_enough(paper: dict[str, Any], best_match: dict[str, Any]) -> bool:
-    if best_match.get("exclude_hits"):
+    if best_match.get("exclude_hits") and not best_match.get("domain_hits"):
         return False
     if best_match.get("domain_gate_enabled"):
-        if float(best_match.get("domain_score") or 0.0) < env_float("MIN_DOMAIN_SCORE", 0.34):
+        if float(best_match.get("domain_score") or 0.0) < env_float("MIN_DOMAIN_SCORE", 0.50):
             return False
     elif "domain_score" not in best_match:
         # Backward compatibility for cached records created before the domain gate existed.
@@ -1704,10 +1768,10 @@ def is_relevant_enough(paper: dict[str, Any], best_match: dict[str, Any]) -> boo
         return float(best_match.get("score") or 0.0) >= (env_float("MIN_CONFERENCE_SCORE", 0.18) if paper.get("source_type") == "conference" else env_float("MIN_PAPER_SCORE", 0.08))
     score = float(best_match.get("score") or 0.0)
     if paper.get("source_type") == "conference":
-        return score >= env_float("MIN_CONFERENCE_SCORE", 0.30)
+        return score >= env_float("MIN_CONFERENCE_SCORE", 0.20)
     if not has_meaningful_summary(paper):
-        return score >= env_float("MIN_TITLE_ONLY_SCORE", 0.28)
-    return score >= env_float("MIN_PAPER_SCORE", 0.24)
+        return score >= env_float("MIN_TITLE_ONLY_SCORE", 0.16)
+    return score >= env_float("MIN_PAPER_SCORE", 0.18)
 
 
 def llm_domain_validation_enabled() -> bool:
@@ -2286,6 +2350,8 @@ def collect(
                 all_candidates.extend(topic_papers)
                 successful_fetches += 1
                 source_stats[source.name]["successful_fetches"] += 1
+                source_stats[source.name]["candidate_count"] = source_stats[source.name].get("candidate_count", 0) + len(topic_papers)
+                print(f"{source.name}: {len(topic_papers)} candidates for {topic.name}", flush=True)
             except Exception as exc:
                 failed_fetches += 1
                 source_stats[source.name]["failed_fetches"] += 1
@@ -2336,12 +2402,14 @@ def collect(
             successful_fetches += 1
             successful_conference_fetches += 1
             source_stats[source.name]["successful_fetches"] += 1
+            source_stats[source.name]["candidate_count"] = len(source_papers)
+            print(f"{source.name}: {len(source_papers)} conference candidates", flush=True)
         except Exception as exc:
             failed_fetches += 1
             failed_conference_fetches += 1
             source_stats[source.name]["failed_fetches"] += 1
             source_stats[source.name]["last_error"] = str(exc)
-            print(f"Warning: DBLP request failed for {source.name}: {exc}", file=sys.stderr)
+            print(f"Warning: {source.provider} request failed for {source.name}: {exc}", file=sys.stderr)
 
     for cached_paper in existing_conference_payload.get("papers", []) if isinstance(existing_conference_payload, dict) else []:
         if not isinstance(cached_paper, dict) or cached_paper.get("source_type") != "conference":
@@ -2627,11 +2695,12 @@ def main() -> None:
     print(f"Wrote {len(payload['papers'])} daily papers to {args.output}")
     stats = payload.get("stats", {})
     print(
-        "Daily arXiv stats: "
+        "Daily collection stats: "
         f"raw={stats.get('raw_daily_candidate_count', 0)}, "
         f"selected={stats.get('daily_candidate_paper_count', 0)}, "
         f"backfilled={stats.get('daily_backfill_added_count', 0)}, "
-        f"filtered={stats.get('filtered_low_relevance_count', 0)}"
+        f"filtered={stats.get('filtered_low_relevance_count', 0)}, "
+        f"llm_filtered={stats.get('llm_domain_filtered_count', 0)}"
     )
     if args.conference_output.exists():
         conference_payload = load_json(args.conference_output)
