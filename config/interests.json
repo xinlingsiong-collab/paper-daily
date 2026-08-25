@@ -89,7 +89,21 @@
         "East Asian architecture",
         "Chinese architecture",
         "Japanese architecture",
-        "Korean architecture"
+        "Korean architecture",
+        "historic city",
+        "historic district",
+        "heritage site",
+        "preservation",
+        "restoration",
+        "conservation",
+        "temple",
+        "shrine",
+        "vernacular",
+        "wooden architecture",
+        "traditional settlement",
+        "historic settlement",
+        "historic buildings",
+        "traditional buildings"
       ],
       "exclude_terms": [
         "computer architecture",
@@ -104,16 +118,8 @@
         "instruction set architecture",
         "computer system architecture",
         "compiler architecture",
-        "distributed systems",
-        "machine learning",
-        "deep learning",
-        "neural network",
-        "computer vision",
-        "natural language processing",
-        "large language model",
-        "GPU",
-        "CPU",
-        "NPU"
+        "operating system architecture",
+        "enterprise architecture"
       ]
     },
     {
@@ -142,7 +148,21 @@
         "Chinese architecture",
         "Japanese architecture",
         "Korean architecture",
-        "East Asian architecture"
+        "East Asian architecture",
+        "historic city",
+        "historic district",
+        "heritage site",
+        "preservation",
+        "restoration",
+        "conservation",
+        "temple",
+        "shrine",
+        "vernacular",
+        "wooden architecture",
+        "traditional settlement",
+        "historic settlement",
+        "historic buildings",
+        "traditional buildings"
       ],
       "exclude_terms": [
         "computer architecture",
@@ -157,16 +177,8 @@
         "instruction set architecture",
         "computer system architecture",
         "compiler architecture",
-        "distributed systems",
-        "machine learning",
-        "deep learning",
-        "neural network",
-        "computer vision",
-        "natural language processing",
-        "large language model",
-        "GPU",
-        "CPU",
-        "NPU"
+        "operating system architecture",
+        "enterprise architecture"
       ]
     },
     {
@@ -194,7 +206,21 @@
         "traditional architectural forms",
         "historic building",
         "building history",
-        "architectural development"
+        "architectural development",
+        "historic city",
+        "historic district",
+        "heritage site",
+        "preservation",
+        "restoration",
+        "conservation",
+        "temple",
+        "shrine",
+        "vernacular",
+        "wooden architecture",
+        "traditional settlement",
+        "historic settlement",
+        "historic buildings",
+        "traditional buildings"
       ],
       "exclude_terms": [
         "computer architecture",
@@ -209,16 +235,8 @@
         "instruction set architecture",
         "computer system architecture",
         "compiler architecture",
-        "distributed systems",
-        "machine learning",
-        "deep learning",
-        "neural network",
-        "computer vision",
-        "natural language processing",
-        "large language model",
-        "GPU",
-        "CPU",
-        "NPU"
+        "operating system architecture",
+        "enterprise architecture"
       ]
     },
     {
@@ -247,7 +265,20 @@
         "historic districts",
         "traditional villages",
         "adaptive reuse",
-        "historic urban landscape"
+        "historic urban landscape",
+        "historic city",
+        "historic district",
+        "heritage site",
+        "preservation",
+        "restoration",
+        "conservation",
+        "temple",
+        "shrine",
+        "vernacular",
+        "wooden architecture",
+        "traditional settlement",
+        "historic settlement",
+        "traditional buildings"
       ],
       "exclude_terms": [
         "computer architecture",
@@ -262,16 +293,8 @@
         "instruction set architecture",
         "computer system architecture",
         "compiler architecture",
-        "distributed systems",
-        "machine learning",
-        "deep learning",
-        "neural network",
-        "computer vision",
-        "natural language processing",
-        "large language model",
-        "GPU",
-        "CPU",
-        "NPU"
+        "operating system architecture",
+        "enterprise architecture"
       ]
     },
     {
@@ -301,7 +324,21 @@
         "3D documentation",
         "photogrammetry",
         "laser scanning",
-        "digital reconstruction"
+        "digital reconstruction",
+        "historic city",
+        "historic district",
+        "heritage site",
+        "preservation",
+        "restoration",
+        "conservation",
+        "temple",
+        "shrine",
+        "vernacular",
+        "wooden architecture",
+        "traditional settlement",
+        "historic settlement",
+        "historic buildings",
+        "traditional buildings"
       ],
       "exclude_terms": [
         "computer architecture",
@@ -316,16 +353,8 @@
         "instruction set architecture",
         "computer system architecture",
         "compiler architecture",
-        "distributed systems",
-        "machine learning",
-        "deep learning",
-        "neural network",
-        "computer vision",
-        "natural language processing",
-        "large language model",
-        "GPU",
-        "CPU",
-        "NPU"
+        "operating system architecture",
+        "enterprise architecture"
       ]
     }
   ]
