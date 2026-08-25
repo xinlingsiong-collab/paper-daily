@@ -74,7 +74,10 @@
         "Japanese architecture",
         "Korean architecture",
         "architectural history",
-        "comparative architectural history"
+        "comparative architectural history",
+        "historic buildings",
+        "built heritage",
+        "heritage conservation"
       ],
       "arxiv_categories": [],
       "domain_terms": [
@@ -134,7 +137,10 @@
         "architectural diffusion",
         "cultural exchange",
         "architectural adaptation",
-        "architectural influence"
+        "architectural influence",
+        "historic buildings",
+        "built heritage",
+        "heritage conservation"
       ],
       "arxiv_categories": [],
       "domain_terms": [
@@ -193,7 +199,10 @@
         "architectural morphology",
         "architectural continuity",
         "traditional architectural forms",
-        "architectural development"
+        "architectural development",
+        "historic buildings",
+        "built heritage",
+        "heritage conservation"
       ],
       "arxiv_categories": [],
       "domain_terms": [
@@ -251,7 +260,9 @@
         "historic towns",
         "historic settlements",
         "historic districts",
-        "adaptive reuse"
+        "adaptive reuse",
+        "historic buildings",
+        "built heritage"
       ],
       "arxiv_categories": [],
       "domain_terms": [
@@ -309,7 +320,10 @@
         "historic building survey",
         "digital heritage",
         "HBIM",
-        "3D documentation"
+        "3D documentation",
+        "historic buildings",
+        "built heritage",
+        "heritage conservation"
       ],
       "arxiv_categories": [],
       "domain_terms": [
@@ -357,5 +371,15 @@
         "enterprise architecture"
       ]
     }
-  ]
+  ],
+  "retrieval": {
+    "semantic_expansion": true,
+    "citation_expansion": true,
+    "max_seed_papers_per_topic": 3,
+    "max_related_per_seed": 3,
+    "max_citations_per_seed": 3,
+    "max_recommendations_per_seed": 3,
+    "max_expanded_papers_per_topic": 18,
+    "principle": "关键词只负责第一路召回；OpenAlex related/referenced/citing works 与 Semantic Scholar recommendations 用于发现没有配置关键词的新论文；最终由规则与LLM判断相关性。"
+  }
 }
