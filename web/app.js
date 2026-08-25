@@ -222,14 +222,31 @@ function renderPaper(paper) {
 
   const absLink = node.querySelector(".abs-link");
   const pdfLink = node.querySelector(".pdf-link");
+  const oaLink = node.querySelector(".oa-link");
+  const repositoryLink = node.querySelector(".repository-link");
+  const publisherLink = node.querySelector(".publisher-link");
   const downloadLink = node.querySelector(".download-link");
-  const pdfUrl = paper.pdf_url || paper.paper_url || "#";
-  absLink.href = paper.paper_url || "#";
-  pdfLink.href = pdfUrl;
-  downloadLink.href = pdfUrl;
+  const pdfUrl = paper.pdf_url || "";
+  absLink.href = paper.paper_url || paper.doi_url || "#";
+  pdfLink.href = pdfUrl || paper.oa_url || paper.doi_url || paper.paper_url || "#";
+  downloadLink.href = pdfUrl || "#";
   downloadLink.setAttribute("download", safeFilename(paper));
   downloadLink.setAttribute("target", "_blank");
   downloadLink.setAttribute("rel", "noreferrer");
+
+  const setOptionalLink = (link, url) => {
+    if (url) {
+      link.href = url;
+      link.hidden = false;
+    } else {
+      link.hidden = true;
+    }
+  };
+  setOptionalLink(oaLink, paper.oa_url);
+  setOptionalLink(repositoryLink, paper.repository_url);
+  setOptionalLink(publisherLink, paper.publisher_url || paper.doi_url);
+  pdfLink.hidden = !pdfUrl && !paper.oa_url && !paper.doi_url && !paper.paper_url;
+  downloadLink.hidden = !pdfUrl;
   return node;
 }
 
