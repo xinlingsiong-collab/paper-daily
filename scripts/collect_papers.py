@@ -18,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -53,8 +53,8 @@ class Topic:
     description: str
     keywords: list[str]
     arxiv_categories: list[str]
-    domain_terms: list[str] = None
-    exclude_terms: list[str] = None
+    domain_terms: list[str] = field(default_factory=list)
+    exclude_terms: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -154,11 +154,6 @@ def parse_sources(config: dict[str, Any]) -> list[SourceConfig]:
             continue
         source_type = str(item.get("type") or "").strip().lower()
         if not source_type:
-            continue
-        if (
-            source_type in {"semantic_scholar", "semanticscholar", "semantic-scholar"}
-            and not env_flag("ENABLE_SEMANTIC_SCHOLAR", False)
-        ):
             continue
         if item.get("enabled", True) is False:
             continue
@@ -500,6 +495,12 @@ def parse_arxiv_entries(xml_data: bytes, seed_topic: str = "") -> list[dict[str,
                 "updated": updated,
                 "paper_url": paper_id,
                 "pdf_url": pdf_url or paper_id.replace("/abs/", "/pdf/"),
+                "oa_url": paper_id,
+                "repository_url": paper_id,
+                "doi_url": "",
+                "publisher_url": paper_id,
+                "open_access": True,
+                "license": "arXiv",
                 "categories": categories,
                 "seed_topic": seed_topic,
             }
@@ -619,6 +620,9 @@ def semantic_scholar_paper_from_item(item: dict[str, Any]) -> dict[str, Any] | N
     if venue:
         categories.append(venue)
     pdf_url = str((item.get("openAccessPdf") or {}).get("url") or "")
+    external_ids = item.get("externalIds") or {}
+    doi = str(external_ids.get("DOI") or "")
+    doi_url = f"https://doi.org/{doi}" if doi else ""
     return {
         "id": f"s2:{paper_id}",
         "source": "Semantic Scholar",
@@ -628,7 +632,14 @@ def semantic_scholar_paper_from_item(item: dict[str, Any]) -> dict[str, Any] | N
         "published": date_to_iso(item.get("publicationDate") or item.get("year")),
         "updated": "",
         "paper_url": str(item.get("url") or f"https://www.semanticscholar.org/paper/{paper_id}"),
+        "doi": doi,
         "pdf_url": pdf_url,
+        "oa_url": pdf_url,
+        "repository_url": pdf_url,
+        "doi_url": doi_url,
+        "publisher_url": doi_url,
+        "open_access": bool(pdf_url),
+        "license": "",
         "categories": categories[:8],
     }
 
@@ -652,41 +663,55 @@ def find_semantic_scholar_by_title(title: str, max_results: int = 5) -> dict[str
     return None
 
 
+def openalex_location_metadata(work: dict[str, Any]) -> dict[str, Any]:
+    locations = work.get("locations") or []
+    primary = work.get("primary_location") or {}
+    best_oa = work.get("best_oa_location") or {}
+    candidates = [best_oa, primary, *locations]
+    pdf_url = ""
+    landing_url = ""
+    repository_url = ""
+    for location in candidates:
+        if not isinstance(location, dict):
+            continue
+        pdf_url = pdf_url or str(location.get("pdf_url") or "")
+        landing_url = landing_url or str(location.get("landing_page_url") or "")
+        source = location.get("source") or {}
+        if source.get("type") == "repository":
+            repository_url = repository_url or str(location.get("landing_page_url") or "")
+    doi = str(work.get("doi") or "")
+    doi_url = doi if doi.startswith("http") else (f"https://doi.org/{doi}" if doi else "")
+    return {
+        "doi": doi,
+        "pdf_url": pdf_url,
+        "oa_url": landing_url or repository_url,
+        "repository_url": repository_url,
+        "doi_url": doi_url,
+        "publisher_url": str(primary.get("landing_page_url") or doi_url or ""),
+        "open_access": bool((work.get("open_access") or {}).get("is_oa")),
+        "license": str((work.get("open_access") or {}).get("oa_status") or ""),
+    }
+
+
 def openalex_paper_from_work(work: dict[str, Any], source_name: str = "OpenAlex") -> dict[str, Any] | None:
     title = normalize_space(str(work.get("title") or ""))
     work_id = str(work.get("id") or work.get("doi") or title)
     if not title or not work_id:
         return None
-    locations = work.get("locations") or []
-    primary = work.get("primary_location") or {}
-    best_oa = work.get("best_oa_location") or {}
-    pdf_url = (
-        primary.get("pdf_url")
-        or best_oa.get("pdf_url")
-        or next((location.get("pdf_url") for location in locations if location.get("pdf_url")), "")
-    )
-    authors = [
-        str((authorship.get("author") or {}).get("display_name") or "")
-        for authorship in work.get("authorships", [])
-    ]
-    concepts = [
-        str(concept.get("display_name") or "")
-        for concept in work.get("concepts", [])[:8]
-        if concept.get("display_name")
-    ]
+    authors = [str((a.get("author") or {}).get("display_name") or "") for a in work.get("authorships", [])]
+    concepts = [str(c.get("display_name") or "") for c in work.get("concepts", [])[:8] if c.get("display_name")]
     return {
         "id": f"openalex:{work_id.rsplit('/', 1)[-1]}",
         "source": source_name,
         "title": title,
-        "authors": [author for author in authors if author],
+        "authors": [a for a in authors if a],
         "summary": normalize_space(openalex_abstract_text(work)),
         "published": date_to_iso(work.get("publication_date") or work.get("publication_year")),
         "updated": "",
-        "paper_url": str(work.get("doi") or work.get("id") or ""),
-        "pdf_url": str(pdf_url or ""),
+        "paper_url": str(work.get("id") or ""),
+        **openalex_location_metadata(work),
         "categories": concepts,
     }
-
 
 def find_openalex_by_title(title: str, max_results: int = 5) -> dict[str, Any] | None:
     params = {
@@ -1146,6 +1171,8 @@ def conference_paper_from_crossref_item(
     ]
     container = normalize_space(str((item.get("container-title") or [source.container_title or source.name])[0]))
     abstract = html_to_text(str(item.get("abstract") or ""))
+    links = item.get("link") or []
+    pdf_url = next((str(link.get("URL") or "") for link in links if isinstance(link, dict) and "pdf" in str(link.get("content-type") or "").lower()), "")
     return {
         "id": f"crossref-conference:{doi or source.id + ':' + str(year) + ':' + title}",
         "source": f"Crossref · {source.name}",
@@ -1156,7 +1183,14 @@ def conference_paper_from_crossref_item(
         "published": crossref_date_for_item(item, year),
         "updated": "",
         "paper_url": url,
-        "pdf_url": url,
+        "doi": doi,
+        "pdf_url": pdf_url,
+        "oa_url": pdf_url,
+        "repository_url": "",
+        "doi_url": f"https://doi.org/{doi}" if doi else "",
+        "publisher_url": url,
+        "open_access": bool(pdf_url),
+        "license": "",
         "categories": [source.name, source.group, str(year)],
         "venue": container,
         "conference": {
@@ -1265,43 +1299,11 @@ def fetch_openalex(topic: Topic, max_results: int, source: SourceConfig) -> list
     data = request_json(url, timeout=float(os.getenv("OPENALEX_TIMEOUT_SECONDS", "60")))
     papers = []
     for work in data.get("results", []):
-        locations = work.get("locations") or []
-        primary = work.get("primary_location") or {}
-        best_oa = work.get("best_oa_location") or {}
-        pdf_url = (
-            primary.get("pdf_url")
-            or best_oa.get("pdf_url")
-            or next((location.get("pdf_url") for location in locations if location.get("pdf_url")), "")
-        )
-        authors = [
-            str((authorship.get("author") or {}).get("display_name") or "")
-            for authorship in work.get("authorships", [])
-        ]
-        concepts = [
-            str(concept.get("display_name") or "")
-            for concept in work.get("concepts", [])[:8]
-            if concept.get("display_name")
-        ]
-        work_id = str(work.get("id") or work.get("doi") or work.get("title") or "")
-        if not work_id:
-            continue
-        papers.append(
-            {
-                "id": f"openalex:{work_id.rsplit('/', 1)[-1]}",
-                "source": source.name,
-                "title": normalize_space(str(work.get("title") or "")),
-                "authors": [author for author in authors if author],
-                "summary": normalize_space(openalex_abstract_text(work)),
-                "published": date_to_iso(work.get("publication_date") or work.get("publication_year")),
-                "updated": "",
-                "paper_url": str(work.get("doi") or work.get("id") or ""),
-                "pdf_url": str(pdf_url or ""),
-                "categories": concepts,
-                "seed_topic": topic.id,
-            }
-        )
+        paper = openalex_paper_from_work(work, source.name)
+        if paper:
+            paper["seed_topic"] = topic.id
+            papers.append(paper)
     return papers
-
 
 def crossref_date(item: dict[str, Any]) -> str:
     for field in ("published-print", "published-online", "published", "created", "issued"):
@@ -1341,6 +1343,8 @@ def fetch_crossref(topic: Topic, max_results: int, source: SourceConfig) -> list
             if name:
                 authors.append(name)
         subjects = [str(subject) for subject in item.get("subject", [])[:8]]
+        links = item.get("link") or []
+        pdf_url = next((str(link.get("URL") or "") for link in links if isinstance(link, dict) and "pdf" in str(link.get("content-type") or "").lower()), "")
         papers.append(
             {
                 "id": f"crossref:{doi or slugify(title)}",
@@ -1351,7 +1355,14 @@ def fetch_crossref(topic: Topic, max_results: int, source: SourceConfig) -> list
                 "published": crossref_date(item),
                 "updated": "",
                 "paper_url": paper_url,
-                "pdf_url": "",
+                "doi": doi,
+                "pdf_url": pdf_url,
+                "oa_url": pdf_url,
+                "repository_url": "",
+                "doi_url": f"https://doi.org/{doi}" if doi else "",
+                "publisher_url": paper_url,
+                "open_access": bool(pdf_url),
+                "license": "",
                 "categories": subjects,
                 "seed_topic": topic.id,
             }
@@ -1569,61 +1580,39 @@ def collection_cutoff(
     return now - dt.timedelta(days=max(0, days)), "lookback"
 
 
-def _contains_term(text: str, term: str) -> bool:
-    """Match a configured phrase without substring false positives."""
-    normalized_text = normalize_space(text).lower()
-    normalized_term = normalize_space(term).lower()
-    if not normalized_term:
-        return False
-    # Word-boundary matching prevents e.g. 'arch' from matching unrelated strings.
-    pattern = r"(?<![a-z0-9])" + re.escape(normalized_term) + r"(?![a-z0-9])"
-    return re.search(pattern, normalized_text) is not None
-
-
 def keyword_score(topic: Topic, paper: dict[str, Any]) -> tuple[float, list[str]]:
     haystack = f"{paper.get('title', '')} {paper.get('summary', '')}".lower()
     hits = []
     weighted = 0.0
     for keyword in topic.keywords:
-        if _contains_term(haystack, keyword):
+        normalized = normalize_space(keyword).lower()
+        if normalized and re.search(r"(?<![a-z])" + re.escape(normalized) + r"(?![a-z])", haystack):
             hits.append(keyword)
-            # Longer, more specific phrases carry more weight than single words.
-            weighted += min(1.0, max(0.45, len(keyword.split()) / 4))
+            weighted += min(1.0, max(0.35, len(normalized.split()) / 5))
     score = min(1.0, weighted / max(2.0, min(5.0, len(topic.keywords) / 2)))
     return score, hits[:8]
 
 
 def domain_validation(topic: Topic, paper: dict[str, Any]) -> tuple[float, list[str], list[str]]:
-    """
-    Domain gate for ambiguous terms such as architecture/architectural.
-
-    Positive domain terms establish that 'architecture' is being used in a
-    built-environment / architectural-history context. Negative terms are
-    hard exclusions for computer/software/network/neural architecture.
-    """
-    title = str(paper.get("title") or "")
-    summary = str(paper.get("summary") or "")
-    title_hits = [term for term in (topic.domain_terms or []) if _contains_term(title, term)]
-    body_hits = [term for term in (topic.domain_terms or []) if _contains_term(summary, term)]
-    positive_hits = list(dict.fromkeys(title_hits + body_hits))
-
-    negative_hits = [
-        term for term in (topic.exclude_terms or [])
-        if _contains_term(f"{title} {summary}", term)
-    ]
-
+    haystack = normalize_space(f"{paper.get('title', '')} {paper.get('summary', '')}").lower()
+    positive_hits = []
+    negative_hits = []
+    for term in topic.domain_terms:
+        normalized = normalize_space(term).lower()
+        if normalized and re.search(r"(?<![a-z])" + re.escape(normalized) + r"(?![a-z])", haystack):
+            positive_hits.append(term)
+    for term in topic.exclude_terms:
+        normalized = normalize_space(term).lower()
+        if normalized and re.search(r"(?<![a-z])" + re.escape(normalized) + r"(?![a-z])", haystack):
+            negative_hits.append(term)
     if negative_hits:
-        return 0.0, positive_hits[:10], negative_hits[:10]
-
-    if not positive_hits:
-        return 0.0, [], []
-
-    # Title evidence is more reliable than a single incidental abstract mention.
-    score = min(1.0, 0.55 * len(title_hits) + 0.25 * min(3, len(body_hits)))
-    return round(score, 3), positive_hits[:10], []
+        return 0.0, positive_hits[:8], negative_hits[:8]
+    return min(1.0, len(positive_hits) / 3.0), positive_hits[:8], []
 
 
 def category_score(topic: Topic, paper: dict[str, Any]) -> float:
+    if str(paper.get("source", "")).lower() != "arxiv":
+        return 0.0
     paper_categories = set(paper.get("categories", []))
     topic_categories = set(topic.arxiv_categories)
     if not paper_categories or not topic_categories:
@@ -1632,17 +1621,11 @@ def category_score(topic: Topic, paper: dict[str, Any]) -> float:
 
 
 def lexical_overlap_score(topic: Topic, paper: dict[str, Any]) -> float:
-    topic_terms = set(
-        re.findall(
-            r"[a-zA-Z0-9]+",
-            f"{topic.description} {' '.join(topic.keywords)} {' '.join(topic.domain_terms or [])}".lower(),
-        )
-    )
+    topic_terms = set(re.findall(r"[a-zA-Z0-9]+", f"{topic.description} {' '.join(topic.keywords)}".lower()))
     paper_terms = set(re.findall(r"[a-zA-Z0-9]+", f"{paper.get('title', '')} {paper.get('summary', '')}".lower()))
     if not topic_terms or not paper_terms:
         return 0.0
-    overlap = topic_terms & paper_terms
-    return min(1.0, len(overlap) / max(8, len(topic_terms) * 0.18))
+    return min(1.0, len(topic_terms & paper_terms) / max(8, len(topic_terms) * 0.18))
 
 
 def match_level(score: float) -> str:
@@ -1658,25 +1641,9 @@ def score_paper(topic: Topic, paper: dict[str, Any]) -> dict[str, Any]:
     d_score, domain_hits, exclude_hits = domain_validation(topic, paper)
     c_score = category_score(topic, paper)
     l_score = lexical_overlap_score(topic, paper)
-
-    if topic.domain_terms or topic.exclude_terms:
-        # Domain evidence is deliberately weighted most heavily. This prevents
-        # generic "architecture" hits from outranking architectural-history work.
-        base_score = round(
-            0.30 * k_score +
-            0.10 * c_score +
-            0.15 * l_score +
-            0.45 * d_score,
-            3,
-        )
-    else:
-        # Backward-compatible scoring for legacy/custom topics that have not
-        # yet defined a domain gate.
-        base_score = round(0.50 * k_score + 0.25 * c_score + 0.25 * l_score, 3)
-
+    score = round(0.30 * k_score + 0.45 * d_score + 0.10 * c_score + 0.15 * l_score, 3)
     if exclude_hits:
-        base_score = 0.0
-
+        score = 0.0
     reason_parts = []
     if hits:
         reason_parts.append("关键词命中：" + "、".join(hits))
@@ -1684,26 +1651,20 @@ def score_paper(topic: Topic, paper: dict[str, Any]) -> dict[str, Any]:
         reason_parts.append("建筑领域语境：" + "、".join(domain_hits))
     if exclude_hits:
         reason_parts.append("排除语境：" + "、".join(exclude_hits))
-    if c_score > 0:
-        reason_parts.append("arXiv 分类重合：" + "、".join(sorted(set(topic.arxiv_categories) & set(paper.get("categories", [])))))
     if not reason_parts:
-        reason_parts.append("缺少明确的建筑学/建筑史语境，需要二次验证。")
-
-    result = {
+        reason_parts.append("缺少明确建筑领域语境，需要二次验证。")
+    return {
         "topic_id": topic.id,
         "topic_name": topic.name,
-        "score": base_score,
-        "level": match_level(base_score),
+        "score": score,
+        "level": match_level(score),
         "reason": "；".join(reason_parts),
         "keyword_hits": hits,
+        "domain_hits": domain_hits,
+        "exclude_hits": exclude_hits,
+        "domain_score": d_score,
+        "domain_gate_enabled": bool(topic.domain_terms),
     }
-    if topic.domain_terms or topic.exclude_terms:
-        result.update({
-            "domain_hits": domain_hits,
-            "exclude_hits": exclude_hits,
-            "domain_score": d_score,
-        })
-    return result
 
 
 def env_float(name: str, default: float) -> float:
@@ -1720,7 +1681,7 @@ def is_placeholder_conference_summary(paper: dict[str, Any]) -> bool:
     if paper.get("source_type") != "conference" or paper.get("abstract_source"):
         return False
     summary = normalize_space(str(paper.get("summary") or ""))
-    return summary.startswith("DBLP 题录")
+    return summary.startswith("DBLP 题录") or summary.startswith("Crossref 会议论文题录")
 
 
 def has_meaningful_summary(paper: dict[str, Any], min_chars: int = 80) -> bool:
@@ -1731,132 +1692,58 @@ def has_meaningful_summary(paper: dict[str, Any], min_chars: int = 80) -> bool:
 
 
 def is_relevant_enough(paper: dict[str, Any], best_match: dict[str, Any]) -> bool:
-    # Legacy/custom match objects without domain-gate metadata retain the old
-    # behavior. All configured architecture topics use the stricter branch.
-    if "domain_score" not in best_match and "exclude_hits" not in best_match:
-        if best_match.get("keyword_hits"):
-            return True
-        score = float(best_match.get("score") or 0.0)
-        if paper.get("source_type") == "conference":
-            return score >= env_float("MIN_CONFERENCE_SCORE", 0.18)
-        if not has_meaningful_summary(paper):
-            return score >= env_float("MIN_TITLE_ONLY_SCORE", 0.18)
-        return score >= env_float("MIN_PAPER_SCORE", 0.08)
-
-    # Hard reject: an explicit computer/software/system/neural architecture
-    # context must never pass merely because it contains "architecture".
     if best_match.get("exclude_hits"):
         return False
-
-    domain_score = float(best_match.get("domain_score") or 0.0)
-    min_domain_score = env_float("MIN_DOMAIN_SCORE", 0.15)
-
-    # Without domain evidence, low-information/title-only records are rejected.
-    if domain_score < min_domain_score:
-        return False
-
-    if best_match.get("domain_validation") == "irrelevant":
-        return False
-
-    if best_match.get("domain_validation") == "relevant":
-        return True
-
+    if best_match.get("domain_gate_enabled"):
+        if float(best_match.get("domain_score") or 0.0) < env_float("MIN_DOMAIN_SCORE", 0.34):
+            return False
+    elif "domain_score" not in best_match:
+        # Backward compatibility for cached records created before the domain gate existed.
+        if best_match.get("keyword_hits"):
+            return True
+        return float(best_match.get("score") or 0.0) >= (env_float("MIN_CONFERENCE_SCORE", 0.18) if paper.get("source_type") == "conference" else env_float("MIN_PAPER_SCORE", 0.08))
     score = float(best_match.get("score") or 0.0)
     if paper.get("source_type") == "conference":
         return score >= env_float("MIN_CONFERENCE_SCORE", 0.30)
     if not has_meaningful_summary(paper):
-        return score >= env_float("MIN_TITLE_ONLY_SCORE", 0.30)
-    return score >= env_float("MIN_PAPER_SCORE", 0.22)
+        return score >= env_float("MIN_TITLE_ONLY_SCORE", 0.28)
+    return score >= env_float("MIN_PAPER_SCORE", 0.24)
 
 
-def build_domain_validation_prompt(topic: Topic, paper: dict[str, Any], base_match: dict[str, Any]) -> str:
-    return f"""
-你是“建筑史与建筑遗产”领域的严格论文筛选器。你的任务不是总结论文，而是判断它是否真正属于我的研究方向。
+def llm_domain_validation_enabled() -> bool:
+    return llm_enabled() and env_flag("LLM_DOMAIN_VALIDATION", True)
 
-【重要消歧规则】
-“architecture / architectural / architect”具有高度歧义。
-如果它指的是 computer architecture、software architecture、system architecture、
-network architecture、neural architecture、model architecture、hardware architecture、
-processor architecture、microarchitecture、instruction set architecture 等计算机/软件/硬件概念，
-必须判定为不相关。
 
-只有当论文明确讨论 buildings、historic buildings、traditional buildings、
-architectural history、architectural heritage、architectural conservation、
-vernacular architecture、historic towns、historic settlements、architectural archaeology
-或类似建筑学/建筑史/建筑遗产对象时，才可以判定为相关。
+def validate_relevance_with_llm(topic: Topic, paper: dict[str, Any], base_match: dict[str, Any]) -> tuple[bool, float, str]:
+    if not llm_domain_validation_enabled():
+        return True, 1.0, "规则验证模式"
+    prompt = f"""你是建筑史、历史建筑与建筑遗产领域的论文筛选专家。
 
-我的研究方向：
-名称：{topic.name}
+严格判断论文是否真正属于：建筑史、历史建筑、传统建筑、建筑遗产、历史建筑保护、历史城镇/传统聚落、东亚建筑史、中日韩建筑文化交流、建筑考古、历史建筑数字化记录。
+
+特别注意：architecture / architectural / architect 有歧义。若实际指 computer architecture、software architecture、system architecture、network architecture、neural architecture、model architecture、hardware architecture、microarchitecture、processor architecture、instruction set architecture，必须判定为不相关。
+
+只有明确涉及 buildings、historic buildings、traditional buildings、architectural history、architectural heritage、architectural conservation、vernacular architecture、historic settlements、architectural archaeology 等建筑学/建筑史语境，才判定相关。
+
+研究方向：{topic.name}
 描述：{topic.description}
-领域词：{", ".join(topic.domain_terms or [])}
-排除词：{", ".join(topic.exclude_terms or [])}
+关键词：{", ".join(topic.keywords)}
 
-论文：
 标题：{paper.get("title", "")}
 摘要：{paper.get("summary", "")}
 分类：{", ".join(paper.get("categories", []))}
+规则匹配：{base_match.get("reason", "")}
 
-规则匹配结果：
-{base_match.get("reason", "")}
-
-请只输出 JSON：
-{{
-  "relevant": true,
-  "confidence": 0.0,
-  "reason": "用一句中文说明为什么属于或不属于建筑史/历史建筑/建筑遗产研究"
-}}
-""".strip()
-
-
-def validate_domain_with_llm(topic: Topic, paper: dict[str, Any], base_match: dict[str, Any]) -> dict[str, Any]:
-    if not llm_enabled() or not env_flag("LLM_DOMAIN_VALIDATION", True):
-        return {"status": "skipped", "confidence": 0.0, "reason": ""}
-
+只输出 JSON：{{"relevant": true/false, "confidence": 0.0, "reason": "一句中文说明"}}"""
     try:
-        data = call_openai_compatible(build_domain_validation_prompt(topic, paper, base_match))
+        data = call_openai_compatible(prompt)
         relevant = bool(data.get("relevant", False))
         confidence = max(0.0, min(1.0, float(data.get("confidence", 0.0) or 0.0)))
-        return {
-            "status": "relevant" if relevant else "irrelevant",
-            "confidence": confidence,
-            "reason": str(data.get("reason", "")),
-        }
+        reason = str(data.get("reason") or "")
+        return relevant and confidence >= env_float("LLM_DOMAIN_MIN_CONFIDENCE", 0.75), confidence, reason
     except Exception as exc:
-        print(f"Warning: domain validation failed for {paper.get('id')}: {exc}", file=sys.stderr)
-        return {"status": "error", "confidence": 0.0, "reason": str(exc)}
-
-
-def apply_domain_validation(
-    topic: Topic,
-    paper: dict[str, Any],
-    best_match: dict[str, Any],
-    validations_used: int,
-) -> tuple[dict[str, Any], int]:
-    max_validations = max(0, env_int("MAX_DOMAIN_VALIDATIONS", 40))
-    if validations_used >= max_validations:
-        return best_match, validations_used
-
-    # Only spend LLM calls on candidates that have some domain evidence.
-    if float(best_match.get("domain_score") or 0.0) < env_float("LLM_MIN_DOMAIN_SCORE", 0.15):
-        return best_match, validations_used
-
-    if not llm_enabled() or not env_flag("LLM_DOMAIN_VALIDATION", True):
-        return best_match, validations_used
-
-    result = validate_domain_with_llm(topic, paper, best_match)
-    validations_used += 1
-    updated = dict(best_match)
-    updated["domain_validation"] = result["status"]
-    updated["domain_validation_confidence"] = result["confidence"]
-    if result["reason"]:
-        updated["domain_validation_reason"] = result["reason"]
-
-    # High-confidence rejection is an immediate hard gate.
-    if result["status"] == "irrelevant" and result["confidence"] >= env_float("MIN_DOMAIN_REJECTION_CONFIDENCE", 0.70):
-        updated["score"] = 0.0
-        updated["level"] = "low"
-    return updated, validations_used
-
+        print(f"Warning: LLM domain validation failed for {paper.get('id')}: {exc}", file=sys.stderr)
+        return True, 0.0, "LLM 验证失败，回退到规则筛选"
 
 def enrich_conference_papers_from_arxiv(papers: list[dict[str, Any]]) -> dict[str, Any]:
     max_enrichments = max(
@@ -2074,17 +1961,57 @@ def summarize_one(args: tuple[Topic, dict[str, Any]]) -> tuple[str, dict[str, st
     return paper_id, summary, adjusted_match
 
 
-def dedupe_papers(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen = set()
-    unique = []
-    for paper in papers:
-        key = paper.get("id") or paper.get("paper_url")
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(paper)
-    return unique
+def paper_identity_key(paper: dict[str, Any]) -> str:
+    doi = str(paper.get("doi") or paper.get("doi_url") or "").lower().strip()
+    if doi:
+        doi = re.sub(r"^https?://doi.org/", "", doi).rstrip(".")
+        return f"doi:{doi}"
+    paper_url = str(paper.get("paper_url") or "")
+    match = re.search(r"arxiv.org/(?:abs|pdf)/([^/?#]+)", paper_url, flags=re.I)
+    if match:
+        return f"arxiv:{match.group(1).lower()}"
+    title = title_match_key(str(paper.get("title") or ""))
+    year = str(paper.get("published") or "")[:4]
+    return f"title:{title}:{year}" if title else str(paper.get("id") or paper_url)
 
+
+def merge_paper_records(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    sources = []
+    for value in [base.get("source"), incoming.get("source")]:
+        if value and value not in sources:
+            sources.append(value)
+    if sources:
+        merged["sources"] = sources
+        merged["source"] = sources[0] if len(sources) == 1 else " + ".join(sources[:3])
+    for field in ("pdf_url", "oa_url", "repository_url", "doi_url", "publisher_url", "summary", "doi"):
+        if not merged.get(field) and incoming.get(field):
+            merged[field] = incoming[field]
+    if incoming.get("open_access"):
+        merged["open_access"] = True
+    if not merged.get("license") and incoming.get("license"):
+        merged["license"] = incoming["license"]
+    for field in ("authors", "categories"):
+        values = []
+        for value in [*(base.get(field) or []), *(incoming.get(field) or [])]:
+            if value and value not in values:
+                values.append(value)
+        if values:
+            merged[field] = values[:12]
+    return merged
+
+
+def dedupe_papers(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_key = {}
+    order = []
+    for paper in papers:
+        key = paper_identity_key(paper)
+        if key not in by_key:
+            by_key[key] = dict(paper)
+            order.append(key)
+        else:
+            by_key[key] = merge_paper_records(by_key[key], paper)
+    return [by_key[key] for key in order]
 
 def paper_key(paper: dict[str, Any]) -> str:
     return str(paper.get("id") or paper.get("paper_url") or "")
@@ -2432,8 +2359,10 @@ def collect(
     recent_papers = []
     daily_backfill_candidates = []
     filtered_low_relevance = 0
-    domain_validation_rejected = 0
-    domain_validation_used = 0
+    llm_domain_filtered = 0
+    llm_domain_validated = 0
+    llm_domain_validation_attempts = 0
+    max_llm_domain_validations = max(0, env_int("MAX_LLM_DOMAIN_VALIDATIONS", 50))
     raw_daily_candidate_count = 0
     daily_outside_cutoff_count = 0
     backfill_days = max(days, env_int("DAILY_BACKFILL_DAYS", 14))
@@ -2457,19 +2386,20 @@ def collect(
         matches = [score_paper(topic, paper) for topic in topics]
         matches.sort(key=lambda item: item["score"], reverse=True)
         best_match = matches[0]
-
-        # Second-pass domain validation. This is intentionally separate from
-        # keyword retrieval so ambiguous "architecture" hits do not pass.
-        best_topic = next((topic for topic in topics if topic.id == best_match.get("topic_id")), topics[0])
-        best_match, domain_validation_used = apply_domain_validation(
-            best_topic, paper, best_match, domain_validation_used
-        )
-
         if not is_relevant_enough(paper, best_match):
             filtered_low_relevance += 1
-            if best_match.get("domain_validation") == "irrelevant" or best_match.get("exclude_hits"):
-                domain_validation_rejected += 1
             continue
+        if llm_domain_validation_enabled() and llm_domain_validation_attempts < max_llm_domain_validations:
+            best_topic = next(topic for topic in topics if topic.id == best_match["topic_id"])
+            validated, confidence, validation_reason = validate_relevance_with_llm(best_topic, paper, best_match)
+            llm_domain_validation_attempts += 1
+            llm_domain_validated += 1
+            best_match["domain_validation"] = "relevant" if validated else "irrelevant"
+            best_match["domain_validation_confidence"] = round(confidence, 3)
+            best_match["domain_validation_reason"] = validation_reason
+            if not validated:
+                llm_domain_filtered += 1
+                continue
         paper["matches"] = matches
         paper["best_match"] = best_match
         if in_backfill_window:
@@ -2577,6 +2507,9 @@ def collect(
         "daily_backfill_added_count": daily_backfill_added_count,
         "min_daily_papers": min_daily_papers,
         "filtered_low_relevance_count": filtered_low_relevance,
+        "llm_domain_validated_count": llm_domain_validated,
+        "llm_domain_filtered_count": llm_domain_filtered,
+        "max_llm_domain_validations": max_llm_domain_validations,
         "days": days,
         "collection_mode": collection_mode,
         "collection_cutoff_iso": cutoff.isoformat(),
