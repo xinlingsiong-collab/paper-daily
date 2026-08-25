@@ -2025,6 +2025,7 @@ def fallback_summary(paper: dict[str, Any], best_match: dict[str, Any]) -> dict[
             "evidence": "题录信息来自会议索引，技术细节需要在原文中核验。",
             "limitations": "DBLP 通常不提供摘要；如果 arXiv、Semantic Scholar、OpenAlex 或 Crossref 暂未收录摘要，自动摘要会缺失。",
             "why_relevant": best_match.get("reason", "与配置方向存在文本匹配。"),
+            "translation": "摘要不可用，无法提供可靠中文翻译。",
         }
     if not has_meaningful_summary(paper):
         return {
@@ -2034,6 +2035,7 @@ def fallback_summary(paper: dict[str, Any], best_match: dict[str, Any]) -> dict[
             "evidence": "证据不足，需要阅读全文核验。",
             "limitations": "缺少摘要会降低自动相关性和中文总结质量。",
             "why_relevant": best_match.get("reason", "与配置方向存在文本匹配。"),
+            "translation": "摘要不可用，无法提供可靠中文翻译。",
         }
     return {
         "problem": "未配置模型 API，当前仅基于标题、摘要和关键词生成基础摘要。",
@@ -2042,6 +2044,7 @@ def fallback_summary(paper: dict[str, Any], best_match: dict[str, Any]) -> dict[
         "evidence": "来源摘要可在论文原文中核验。",
         "limitations": "基础模式不会阅读全文，也不会进行深度技术对比。",
         "why_relevant": best_match.get("reason", "与配置方向存在文本匹配。"),
+        "translation": "未调用模型；当前仅提供基础摘要信息，无法生成完整中文翻译。",
     }
 
 
@@ -2058,40 +2061,99 @@ def llm_headers(api_key: str) -> dict[str, str]:
 
 
 def call_openai_compatible(prompt: str) -> dict[str, Any]:
+    """Call an OpenAI-compatible chat API and return parsed JSON.
+
+    DeepSeek changed its public model names in 2026.  Keep the defaults
+    current so a repository that only stores DEEPSEEK_API_KEY keeps working
+    without requiring extra GitHub variables.
+    """
     api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or ""
-    base_url = os.getenv("LLM_BASE_URL", "")
-    if not base_url:
-        base_url = "https://api.deepseek.com/v1" if os.getenv("DEEPSEEK_API_KEY") else "https://api.openai.com/v1"
-    model = os.getenv("LLM_MODEL", "deepseek-chat" if os.getenv("DEEPSEEK_API_KEY") else "gpt-4o-mini")
+    if not api_key:
+        raise RuntimeError("No LLM API key configured")
+
+    is_deepseek = bool(os.getenv("DEEPSEEK_API_KEY")) and not os.getenv("LLM_API_KEY") and not os.getenv("OPENAI_API_KEY")
+    if os.getenv("LLM_BASE_URL"):
+        base_url = os.getenv("LLM_BASE_URL", "")
+    elif is_deepseek:
+        base_url = "https://api.deepseek.com"
+    else:
+        base_url = "https://api.openai.com/v1"
+
+    if os.getenv("LLM_MODEL"):
+        model = os.getenv("LLM_MODEL", "")
+    elif is_deepseek:
+        model = "deepseek-v4-flash"
+    else:
+        model = "gpt-4o-mini"
+
+    if is_deepseek:
+        # deepseek-chat / deepseek-reasoner were retired in July 2026.
+        if model in {"deepseek-chat", "deepseek-reasoner"}:
+            model = "deepseek-v4-flash"
+        # Current DeepSeek docs use https://api.deepseek.com as the base URL.
+        if base_url.rstrip("/") == "https://api.deepseek.com/v1":
+            base_url = "https://api.deepseek.com"
+
     endpoint = base_url.rstrip("/") + "/chat/completions"
+    system_prompt = (
+        "你是严谨的论文技术分析助手。请输出合法 JSON，不要输出 Markdown。"
+        "你的输出必须是 JSON 对象。"
+    )
     payload = {
         "model": model,
         "temperature": 0.2,
+        "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "4000")),
         "response_format": {"type": "json_object"},
         "messages": [
-            {
-                "role": "system",
-                "content": "你是严谨的论文技术分析助手。只输出合法 JSON，不要输出 Markdown。",
-            },
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ],
+        "stream": False,
     }
+    # DeepSeek's current chat API supports thinking control.  Disable it for
+    # short structured JSON tasks to reduce latency/cost and avoid truncated
+    # structured output.
+    if is_deepseek:
+        payload["thinking"] = {"type": "disabled"}
+
     req = urllib.request.Request(
         endpoint,
-        data=json.dumps(payload).encode("utf-8"),
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers=llm_headers(api_key),
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=90) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    content = data["choices"][0]["message"]["content"]
-    return json.loads(content)
+    try:
+        with urllib.request.urlopen(req, timeout=float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace")[:1200]
+        except Exception:
+            pass
+        raise RuntimeError(f"LLM HTTP {exc.code}: {body or exc.reason}") from exc
+
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"LLM returned no choices: {json.dumps(data, ensure_ascii=False)[:1200]}")
+    content = ((choices[0].get("message") or {}).get("content") or "").strip()
+    if not content:
+        raise RuntimeError("LLM returned empty content")
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as exc:
+        # Be tolerant of an accidental fenced JSON response.
+        parsed = extract_json_block(content)
+        if parsed is not None:
+            return parsed
+        raise RuntimeError(f"LLM returned invalid JSON: {content[:800]}") from exc
 
 
 def build_llm_prompt(topic: Topic, paper: dict[str, Any], base_match: dict[str, Any]) -> str:
     abstract_label = "摘要/题录信息" if paper.get("source_type") == "conference" else "摘要"
     return f"""
-请根据论文标题、摘要、分类和我的研究方向，输出精确中文分析。目标不是逐句翻译，而是综合整篇摘要快速判断这篇论文是否值得阅读。
+请根据论文标题、摘要、分类和我的研究方向，输出精确中文分析，并提供摘要的自然中文翻译。
+目标是让网页用户可以直接用中文理解论文；translation 必须忠实于原摘要，不自行补充原文没有的事实。
 要求：
 1. 先识别论文真正解决的问题、核心机制、实验或系统证据，再翻译成自然中文。
 2. 不要夸大摘要中没有的信息；如果证据不足，请明确说明。
@@ -2122,6 +2184,7 @@ arXiv 分类：{", ".join(paper.get("categories", []))}
   "evidence": "摘要中可核验的实验、理论或系统证据；没有则写证据不足",
   "limitations": "可能局限或需要阅读全文确认的点",
   "why_relevant": "为什么匹配我的研究方向",
+  "translation": "原摘要的自然中文翻译；如果没有摘要则写摘要不足",
   "match_score_adjustment": 0.0,
   "match_level": "high|medium|low"
 }}
@@ -2146,6 +2209,7 @@ def summarize_with_llm(topic: Topic, paper: dict[str, Any], base_match: dict[str
         "evidence": str(data.get("evidence", "")),
         "limitations": str(data.get("limitations", "")),
         "why_relevant": str(data.get("why_relevant", "")),
+        "translation": str(data.get("translation", "")),
     }
     adjustment = float(data.get("match_score_adjustment", 0.0) or 0.0)
     adjusted_score = max(0.0, min(1.0, base_match["score"] + adjustment))
