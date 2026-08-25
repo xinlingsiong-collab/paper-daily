@@ -28,6 +28,7 @@ DBLP_API_URL = os.getenv("DBLP_API_URL", "http://dblp.org/search/publ/api")
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
 CROSSREF_WORKS_URL = "https://api.crossref.org/works"
 SEMANTIC_SCHOLAR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL = "https://api.semanticscholar.org/recommendations/v1/papers/forpaper"
 SERPAPI_SEARCH_URL = "https://serpapi.com/search.json"
 ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 DEFAULT_CONFIG = Path("config/interests.json")
@@ -741,6 +742,9 @@ def openalex_paper_from_work(work: dict[str, Any], source_name: str = "OpenAlex"
         "paper_url": str(work.get("id") or ""),
         **openalex_location_metadata(work),
         "categories": concepts,
+        "_openalex_related_works": [str(value) for value in (work.get("related_works") or []) if value],
+        "_openalex_referenced_works": [str(value) for value in (work.get("referenced_works") or []) if value],
+        "_openalex_cited_by_api_url": str(work.get("cited_by_api_url") or ""),
     }
 
 def find_openalex_by_title(title: str, max_results: int = 5) -> dict[str, Any] | None:
@@ -1326,6 +1330,119 @@ def openalex_abstract_text(work: dict[str, Any]) -> str:
     return " ".join(word for _, word in sorted(words))
 
 
+def retrieval_settings(config: dict[str, Any]) -> dict[str, Any]:
+    raw = config.get("retrieval") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "semantic_expansion": bool(raw.get("semantic_expansion", True)),
+        "citation_expansion": bool(raw.get("citation_expansion", True)),
+        "max_seed_papers_per_topic": max(1, int(raw.get("max_seed_papers_per_topic", 4))),
+        "max_related_per_seed": max(0, int(raw.get("max_related_per_seed", 4))),
+        "max_citations_per_seed": max(0, int(raw.get("max_citations_per_seed", 4))),
+        "max_recommendations_per_seed": max(0, int(raw.get("max_recommendations_per_seed", 4))),
+        "max_expanded_papers_per_topic": max(1, int(raw.get("max_expanded_papers_per_topic", 24))),
+    }
+
+def _openalex_work_url(value: str) -> str:
+    value = str(value or "").strip()
+    if value.startswith("https://openalex.org/") or value.startswith("http://openalex.org/"):
+        return value.replace("https://openalex.org/", "https://api.openalex.org/works/").replace("http://openalex.org/", "https://api.openalex.org/works/")
+    if value.startswith("W"):
+        return f"https://api.openalex.org/works/{value}"
+    return ""
+
+def fetch_openalex_work_by_url(url: str) -> dict[str, Any] | None:
+    if not url:
+        return None
+    try:
+        work = request_json(url, timeout=float(os.getenv("OPENALEX_TIMEOUT_SECONDS", "60")))
+    except Exception as exc:
+        print(f"Warning: OpenAlex expansion request failed: {exc}", file=sys.stderr)
+        return None
+    return openalex_paper_from_work(work, "OpenAlex") if isinstance(work, dict) else None
+
+def fetch_openalex_expansions(topic: Topic, seed_papers: list[dict[str, Any]], settings: dict[str, Any]) -> list[dict[str, Any]]:
+    if not settings.get("semantic_expansion") and not settings.get("citation_expansion"):
+        return []
+    seeds = [p for p in seed_papers if str(p.get("source", "")).lower().startswith("openalex")]
+    seeds = sorted(seeds, key=lambda p: paper_activity_datetime(p), reverse=True)[:settings["max_seed_papers_per_topic"]]
+    expanded: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for seed in seeds:
+        if settings.get("semantic_expansion"):
+            for raw_url in list(seed.get("_openalex_related_works") or [])[:settings["max_related_per_seed"]]:
+                url = _openalex_work_url(raw_url)
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                candidate = fetch_openalex_work_by_url(url)
+                if candidate:
+                    candidate["seed_topic"] = topic.id
+                    candidate["retrieval_method"] = "openalex_related"
+                    candidate["retrieval_seed"] = seed.get("title", "")
+                    expanded.append(candidate)
+        if settings.get("citation_expansion"):
+            for raw_url in list(seed.get("_openalex_referenced_works") or [])[:settings["max_citations_per_seed"]]:
+                url = _openalex_work_url(raw_url)
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                candidate = fetch_openalex_work_by_url(url)
+                if candidate:
+                    candidate["seed_topic"] = topic.id
+                    candidate["retrieval_method"] = "openalex_reference"
+                    candidate["retrieval_seed"] = seed.get("title", "")
+                    expanded.append(candidate)
+            cited_api = str(seed.get("_openalex_cited_by_api_url") or "")
+            if cited_api and settings["max_citations_per_seed"] > 0:
+                try:
+                    params = {"per-page": str(settings["max_citations_per_seed"]), "sort": "publication_date:desc"}
+                    url = cited_api + ("&" if "?" in cited_api else "?") + urllib.parse.urlencode(params)
+                    data = request_json(url, timeout=float(os.getenv("OPENALEX_TIMEOUT_SECONDS", "60")))
+                    for work in data.get("results", []):
+                        candidate = openalex_paper_from_work(work, "OpenAlex")
+                        if candidate:
+                            candidate["seed_topic"] = topic.id
+                            candidate["retrieval_method"] = "openalex_citation"
+                            candidate["retrieval_seed"] = seed.get("title", "")
+                            expanded.append(candidate)
+                except Exception as exc:
+                    print(f"Warning: OpenAlex citation expansion failed: {exc}", file=sys.stderr)
+        if len(expanded) >= settings["max_expanded_papers_per_topic"]:
+            break
+    return dedupe_papers(expanded)[:settings["max_expanded_papers_per_topic"]]
+
+def fetch_semantic_recommendations(topic: Topic, seed_papers: list[dict[str, Any]], settings: dict[str, Any]) -> list[dict[str, Any]]:
+    if not settings.get("semantic_expansion") or settings["max_recommendations_per_seed"] <= 0:
+        return []
+    headers = {"User-Agent": "paper-daily-collector/1.0"}
+    api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+    if api_key:
+        headers["x-api-key"] = api_key
+    seeds = [p for p in seed_papers if str(p.get("id", "")).startswith("s2:")]
+    seeds = sorted(seeds, key=lambda p: paper_activity_datetime(p), reverse=True)[:settings["max_seed_papers_per_topic"]]
+    expanded: list[dict[str, Any]] = []
+    for seed in seeds:
+        paper_id = str(seed.get("id", ""))[3:]
+        if not paper_id:
+            continue
+        params = {"limit": str(settings["max_recommendations_per_seed"]), "fields": "paperId,title,abstract,authors,year,publicationDate,url,openAccessPdf,venue,externalIds,fieldsOfStudy"}
+        url = f"{SEMANTIC_SCHOLAR_RECOMMENDATIONS_URL}/{urllib.parse.quote(paper_id)}?{urllib.parse.urlencode(params)}"
+        try:
+            data = request_json(url, headers=headers, timeout=float(os.getenv("SEMANTIC_SCHOLAR_TIMEOUT_SECONDS", "60")))
+        except Exception as exc:
+            print(f"Warning: Semantic Scholar recommendation expansion failed: {exc}", file=sys.stderr)
+            continue
+        for item in data.get("recommendedPapers") or data.get("data") or []:
+            candidate = semantic_scholar_paper_from_item(item)
+            if candidate:
+                candidate["seed_topic"] = topic.id
+                candidate["retrieval_method"] = "semantic_recommendation"
+                candidate["retrieval_seed"] = seed.get("title", "")
+                expanded.append(candidate)
+    return dedupe_papers(expanded)[:settings["max_expanded_papers_per_topic"]]
+
 def fetch_openalex(topic: Topic, max_results: int, source: SourceConfig) -> list[dict[str, Any]]:
     papers = []
     queries = topic_search_queries(topic)
@@ -1705,7 +1822,11 @@ def score_paper(topic: Topic, paper: dict[str, Any]) -> dict[str, Any]:
     d_score, domain_hits, exclude_hits = domain_validation(topic, paper)
     c_score = category_score(topic, paper)
     l_score = lexical_overlap_score(topic, paper)
-    score = round(0.30 * k_score + 0.45 * d_score + 0.10 * c_score + 0.15 * l_score, 3)
+    retrieval_method = str(paper.get("retrieval_method") or "")
+    retrieval_boost = 0.10 if retrieval_method in {
+        "openalex_related", "openalex_reference", "openalex_citation", "semantic_recommendation"
+    } else 0.0
+    score = round(min(1.0, 0.25 * k_score + 0.35 * d_score + 0.10 * c_score + 0.15 * l_score + retrieval_boost), 3)
     if exclude_hits and not domain_hits:
         score = 0.0
     reason_parts = []
@@ -1715,8 +1836,10 @@ def score_paper(topic: Topic, paper: dict[str, Any]) -> dict[str, Any]:
         reason_parts.append("建筑领域语境：" + "、".join(domain_hits))
     if exclude_hits:
         reason_parts.append("排除语境：" + "、".join(exclude_hits))
+    if retrieval_method:
+        reason_parts.append(f"发现路径：{retrieval_method}")
     if not reason_parts:
-        reason_parts.append("缺少明确建筑领域语境，需要二次验证。")
+        reason_parts.append("缺少明确关键词，但保留为低门槛候选交给二次验证。")
     return {
         "topic_id": topic.id,
         "topic_name": topic.name,
@@ -1728,6 +1851,7 @@ def score_paper(topic: Topic, paper: dict[str, Any]) -> dict[str, Any]:
         "exclude_hits": exclude_hits,
         "domain_score": d_score,
         "domain_gate_enabled": bool(topic.domain_terms),
+        "retrieval_method": retrieval_method,
     }
 
 
@@ -1756,22 +1880,37 @@ def has_meaningful_summary(paper: dict[str, Any], min_chars: int = 80) -> bool:
 
 
 def is_relevant_enough(paper: dict[str, Any], best_match: dict[str, Any]) -> bool:
+    # Keywords are retrieval aids, not admission requirements. Only an
+    # unambiguous computer/software architecture meaning is a hard reject.
     if best_match.get("exclude_hits") and not best_match.get("domain_hits"):
         return False
-    if best_match.get("domain_gate_enabled"):
-        if float(best_match.get("domain_score") or 0.0) < env_float("MIN_DOMAIN_SCORE", 0.50):
-            return False
-    elif "domain_score" not in best_match:
-        # Backward compatibility for cached records created before the domain gate existed.
-        if best_match.get("keyword_hits"):
-            return True
-        return float(best_match.get("score") or 0.0) >= (env_float("MIN_CONFERENCE_SCORE", 0.18) if paper.get("source_type") == "conference" else env_float("MIN_PAPER_SCORE", 0.08))
+
+    retrieval_method = str(paper.get("retrieval_method") or "").lower()
+    expanded = retrieval_method in {
+        "openalex_related", "openalex_reference", "openalex_citation",
+        "semantic_recommendation",
+    }
     score = float(best_match.get("score") or 0.0)
+
+    if expanded:
+        # Expansion exists specifically to recover papers that do not share
+        # the seed paper's vocabulary. Let them reach LLM validation.
+        return score >= env_float("MIN_EXPANDED_SCORE", 0.03) or bool(best_match.get("domain_hits"))
+
+    if best_match.get("domain_gate_enabled"):
+        # Do not require domain_terms. A paper can use different terminology.
+        if best_match.get("domain_score", 0.0) <= 0 and not best_match.get("keyword_hits"):
+            return score >= env_float("MIN_KEYWORD_FREE_SCORE", 0.06)
+        return score >= env_float("MIN_PAPER_SCORE", 0.08)
+
+    if "domain_score" not in best_match:
+        return bool(best_match.get("keyword_hits")) or score >= env_float("MIN_PAPER_SCORE", 0.08)
+
     if paper.get("source_type") == "conference":
-        return score >= env_float("MIN_CONFERENCE_SCORE", 0.20)
+        return score >= env_float("MIN_CONFERENCE_SCORE", 0.12)
     if not has_meaningful_summary(paper):
-        return score >= env_float("MIN_TITLE_ONLY_SCORE", 0.16)
-    return score >= env_float("MIN_PAPER_SCORE", 0.18)
+        return score >= env_float("MIN_TITLE_ONLY_SCORE", 0.10)
+    return score >= env_float("MIN_PAPER_SCORE", 0.08)
 
 
 def llm_domain_validation_enabled() -> bool:
@@ -1787,7 +1926,9 @@ def validate_relevance_with_llm(topic: Topic, paper: dict[str, Any], base_match:
 
 特别注意：architecture / architectural / architect 有歧义。若实际指 computer architecture、software architecture、system architecture、network architecture、neural architecture、model architecture、hardware architecture、microarchitecture、processor architecture、instruction set architecture，必须判定为不相关。
 
-只有明确涉及 buildings、historic buildings、traditional buildings、architectural history、architectural heritage、architectural conservation、vernacular architecture、historic settlements、architectural archaeology 等建筑学/建筑史语境，才判定相关。
+不要把“没有出现我的关键词”当作不相关的理由。本系统会通过相似论文、引用关系和推荐论文召回词汇不同的候选；如果标题和摘要描述的是历史建筑、传统建造、遗产建筑、历史聚落、建筑考古、保护修复或东亚建筑史，即使没有配置关键词，也可以判定相关。
+
+computer vision、machine learning、3D reconstruction、photogrammetry、HBIM、digital twin 等只是方法或工具时，不应因此判定为计算机科学论文；如果研究对象本身是历史建筑/文化遗产，则仍可相关。
 
 研究方向：{topic.name}
 描述：{topic.description}
@@ -2024,6 +2165,12 @@ def summarize_one(args: tuple[Topic, dict[str, Any]]) -> tuple[str, dict[str, st
     summary, adjusted_match = summarize_with_llm(topic, paper, paper["best_match"])
     return paper_id, summary, adjusted_match
 
+
+def clean_internal_retrieval_fields(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for paper in papers:
+        for key in ("_openalex_related_works", "_openalex_referenced_works", "_openalex_cited_by_api_url"):
+            paper.pop(key, None)
+    return papers
 
 def paper_identity_key(paper: dict[str, Any]) -> str:
     doi = str(paper.get("doi") or paper.get("doi_url") or "").lower().strip()
@@ -2424,6 +2571,23 @@ def collect(
     if successful_fetches == 0 and failed_fetches > 0 and (existing_payload.get("papers") or existing_conference_payload.get("papers")):
         print("All configured sources failed; preserving existing paper data.", file=sys.stderr)
 
+    # High-recall discovery: expand a few strong seed papers through
+    # OpenAlex related/referenced/citing works and Semantic Scholar
+    # recommendations. These candidates may have zero configured keyword hits.
+    retrieval = retrieval_settings(config)
+    expansion_count = 0
+    for topic in topics:
+        topic_seed_candidates = [
+            p for p in all_candidates
+            if p.get("source_type") != "conference" and p.get("seed_topic") == topic.id
+        ]
+        topic_expanded = fetch_openalex_expansions(topic, topic_seed_candidates, retrieval)
+        topic_expanded += fetch_semantic_recommendations(topic, topic_seed_candidates, retrieval)
+        if topic_expanded:
+            all_candidates.extend(topic_expanded)
+            expansion_count += len(topic_expanded)
+            print(f"Expanded {topic.name}: {len(topic_expanded)} related/citation candidates", flush=True)
+
     recent_papers = []
     daily_backfill_candidates = []
     filtered_low_relevance = 0
@@ -2563,6 +2727,8 @@ def collect(
     )
     daily_merged_papers.sort(key=lambda p: (p["best_match"]["score"], paper_activity_datetime(p)), reverse=True)
     conference_merged_papers.sort(key=lambda p: (p["best_match"]["score"], paper_activity_datetime(p)), reverse=True)
+    clean_internal_retrieval_fields(daily_merged_papers)
+    clean_internal_retrieval_fields(conference_merged_papers)
 
     base_stats = {
         "candidate_paper_count": candidate_paper_count,
@@ -2577,6 +2743,7 @@ def collect(
         "filtered_low_relevance_count": filtered_low_relevance,
         "llm_domain_validated_count": llm_domain_validated,
         "llm_domain_filtered_count": llm_domain_filtered,
+        "high_recall_expansion_candidates": expansion_count,
         "max_llm_domain_validations": max_llm_domain_validations,
         "days": days,
         "collection_mode": collection_mode,
@@ -2697,6 +2864,7 @@ def main() -> None:
     print(
         "Daily collection stats: "
         f"raw={stats.get('raw_daily_candidate_count', 0)}, "
+        f"expanded={stats.get('high_recall_expansion_candidates', 0)}, "
         f"selected={stats.get('daily_candidate_paper_count', 0)}, "
         f"backfilled={stats.get('daily_backfill_added_count', 0)}, "
         f"filtered={stats.get('filtered_low_relevance_count', 0)}, "
